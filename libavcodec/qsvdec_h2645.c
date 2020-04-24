@@ -198,6 +198,8 @@ static const AVOption hevc_options[] = {
         { "default", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_GPUCOPY_DEFAULT }, 0, 0, VD, "gpu_copy"},
         { "on",      NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_GPUCOPY_ON },      0, 0, VD, "gpu_copy"},
         { "off",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_GPUCOPY_OFF },     0, 0, VD, "gpu_copy"},
+
+    { "resize",   "Resize (width)x(height)", OFFSET(qsv.resize_expr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { NULL },
 };
 
@@ -238,6 +240,8 @@ static const AVOption options[] = {
         { "default", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_GPUCOPY_DEFAULT }, 0, 0, VD, "gpu_copy"},
         { "on",      NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_GPUCOPY_ON },      0, 0, VD, "gpu_copy"},
         { "off",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_GPUCOPY_OFF },     0, 0, VD, "gpu_copy"},
+
+    { "resize",   "Resize (width)x(height)", OFFSET(qsv.resize_expr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { NULL },
 };
 
