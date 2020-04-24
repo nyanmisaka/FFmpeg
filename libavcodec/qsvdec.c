@@ -232,8 +232,6 @@ static int qsv_decode_init(AVCodecContext *avctx, QSVContext *q, mfxVideoParam *
 {
     int ret;
 
-    avctx->width        = 1280;
-    avctx->height       = 720;
     avctx->coded_width  = param->mfx.FrameInfo.Width;
     avctx->coded_height = param->mfx.FrameInfo.Height;
     avctx->level        = param->mfx.CodecLevel;
@@ -587,6 +585,9 @@ int ff_qsv_process_data(AVCodecContext *avctx, QSVContext *q,
         avctx->coded_width = 1280;
     if (!avctx->coded_height)
         avctx->coded_height = 720;
+
+    avctx->width = 1280;
+	avctx->height = 720;
 
     ret = qsv_decode_header(avctx, q, pkt, pix_fmt, &param);
 
