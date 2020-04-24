@@ -232,21 +232,14 @@ static int qsv_decode_init(AVCodecContext *avctx, QSVContext *q, mfxVideoParam *
 {
     int ret;
 
-    avctx->width        = param->mfx.FrameInfo.CropW;
-    avctx->height       = param->mfx.FrameInfo.CropH;
+    avctx->width        = 1280;
+    avctx->height       = 720;
     avctx->coded_width  = param->mfx.FrameInfo.Width;
     avctx->coded_height = param->mfx.FrameInfo.Height;
     avctx->level        = param->mfx.CodecLevel;
     avctx->profile      = param->mfx.CodecProfile;
     avctx->field_order  = ff_qsv_map_picstruct(param->mfx.FrameInfo.PicStruct);
     avctx->pix_fmt      = ff_qsv_map_fourcc(param->mfx.FrameInfo.FourCC);
-
-    if (q->resize_expr && sscanf(q->resize_expr, "%dx%d",
-                                   avctx->width, avctx->height) != 2) {
-        ret = AVERROR(EINVAL);
-        return ff_qsv_print_error(avctx, ret,
-                                  "Invalid resize expressions\n");
-    }
 
     ret = MFXVideoDECODE_Init(q->session, param);
     if (ret < 0)
