@@ -232,8 +232,14 @@ static int qsv_decode_init(AVCodecContext *avctx, QSVContext *q, mfxVideoParam *
 {
     int ret;
 
+/*     avctx->width        = param->mfx.FrameInfo.CropW;
+    avctx->height       = param->mfx.FrameInfo.CropH;
     avctx->coded_width  = param->mfx.FrameInfo.Width;
-    avctx->coded_height = param->mfx.FrameInfo.Height;
+    avctx->coded_height = param->mfx.FrameInfo.Height; */
+    avctx->width        = 1280;
+    avctx->height       = 720;
+    avctx->coded_width  = 1280;
+    avctx->coded_height = 720;
     avctx->level        = param->mfx.CodecLevel;
     avctx->profile      = param->mfx.CodecProfile;
     avctx->field_order  = ff_qsv_map_picstruct(param->mfx.FrameInfo.PicStruct);
@@ -571,6 +577,11 @@ int ff_qsv_process_data(AVCodecContext *avctx, QSVContext *q,
     mfxVideoParam param = { 0 };
     enum AVPixelFormat pix_fmt = AV_PIX_FMT_NV12;
 
+    avctx->width        = 1280;
+    avctx->height       = 720;
+    avctx->coded_width  = 1280;
+    avctx->coded_height = 720;
+
     if (!pkt->size)
         return qsv_decode(avctx, q, frame, got_frame, pkt);
 
@@ -585,9 +596,6 @@ int ff_qsv_process_data(AVCodecContext *avctx, QSVContext *q,
         avctx->coded_width = 1280;
     if (!avctx->coded_height)
         avctx->coded_height = 720;
-
-    avctx->width = 1280;
-	avctx->height = 720;
 
     ret = qsv_decode_header(avctx, q, pkt, pix_fmt, &param);
 
