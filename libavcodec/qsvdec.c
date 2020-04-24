@@ -241,6 +241,13 @@ static int qsv_decode_init(AVCodecContext *avctx, QSVContext *q, mfxVideoParam *
     avctx->field_order  = ff_qsv_map_picstruct(param->mfx.FrameInfo.PicStruct);
     avctx->pix_fmt      = ff_qsv_map_fourcc(param->mfx.FrameInfo.FourCC);
 
+    if (q->resize_expr && sscanf(q->resize_expr, "%dx%d",
+                                   avctx->width, avctx->height) != 2) {
+        ret = AVERROR(EINVAL);
+        return ff_qsv_print_error(avctx, ret,
+                                  "Invalid resize expressions\n");
+    }
+
     ret = MFXVideoDECODE_Init(q->session, param);
     if (ret < 0)
         return ff_qsv_print_error(avctx, ret,
@@ -589,13 +596,6 @@ int ff_qsv_process_data(AVCodecContext *avctx, QSVContext *q,
         avctx->coded_height = 720;
 
     ret = qsv_decode_header(avctx, q, pkt, pix_fmt, &param);
-
-    if (q->resize_expr && sscanf(q->resize_expr, "%dx%d",
-                                   param->mfx.FrameInfo.CropW, param->mfx.FrameInfo.CropH) != 2) {
-        av_log(avctx, AV_LOG_ERROR, "Invalid resize expressions\n");
-        ret = AVERROR(EINVAL);
-        return ret;
-    }
 
     if (ret >= 0 && (q->orig_pix_fmt != ff_qsv_map_fourcc(param.mfx.FrameInfo.FourCC) ||
         avctx->coded_width  != param.mfx.FrameInfo.Width ||
