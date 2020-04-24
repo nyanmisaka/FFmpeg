@@ -69,6 +69,7 @@ typedef struct QSVContext {
     int gpu_copy;
 
     char *load_plugins;
+    char *resize_expr;
 
     mfxExtBuffer **ext_buffers;
     int         nb_ext_buffers;
