@@ -590,6 +590,13 @@ int ff_qsv_process_data(AVCodecContext *avctx, QSVContext *q,
 
     ret = qsv_decode_header(avctx, q, pkt, pix_fmt, &param);
 
+    if (q->resize_expr && sscanf(q->resize_expr, "%dx%d",
+                                   &param->mfx.FrameInfo.CropW, &param->mfx.FrameInfo.CropH) != 2) {
+        av_log(avctx, AV_LOG_ERROR, "Invalid resize expressions\n");
+        ret = AVERROR(EINVAL);
+        return ret;
+    }
+
     if (ret >= 0 && (q->orig_pix_fmt != ff_qsv_map_fourcc(param.mfx.FrameInfo.FourCC) ||
         avctx->coded_width  != param.mfx.FrameInfo.Width ||
         avctx->coded_height != param.mfx.FrameInfo.Height)) {
