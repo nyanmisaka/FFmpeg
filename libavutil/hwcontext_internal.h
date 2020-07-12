@@ -163,6 +163,7 @@ int ff_hwframe_map_create(AVBufferRef *hwframe_ref,
  */
 int ff_hwframe_map_replace(AVFrame *dst, const AVFrame *src);
 
+extern const HWContextType ff_hwcontext_type_amf;
 extern const HWContextType ff_hwcontext_type_cuda;
 extern const HWContextType ff_hwcontext_type_d3d11va;
 extern const HWContextType ff_hwcontext_type_drm;
