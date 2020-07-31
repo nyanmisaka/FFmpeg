@@ -245,41 +245,41 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* pS
     if (!frame)
         return AMF_INVALID_POINTER;
 
-    switch (pSurface->pVtbl->GetMemoryType(pSurface))
-        {
-    #if CONFIG_D3D11VA
-            case AMF_MEMORY_DX11:
-            {
-                AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
-                frame->data[0] = plane0->pVtbl->GetNative(plane0);
-                frame->data[1] = (uint8_t*)(intptr_t)0;
+//    switch (pSurface->pVtbl->GetMemoryType(pSurface))
+//        {
+//    #if CONFIG_D3D11VA
+//            case AMF_MEMORY_DX11:
+//            {
+//                AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
+//                frame->data[0] = plane0->pVtbl->GetNative(plane0);
+//                frame->data[1] = (uint8_t*)(intptr_t)0;
 
-                frame->buf[0] = av_buffer_create(NULL,
-                                         0,
-                                         amf_free_amfsurface,
-                                         pSurface,
-                                         AV_BUFFER_FLAG_READONLY);
-                pSurface->pVtbl->Acquire(pSurface);
-            }
-            break;
-    #endif
-    #if CONFIG_DXVA2
-            case AMF_MEMORY_DX9:
-            {
-                AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
-                frame->data[3] = plane0->pVtbl->GetNative(plane0);
+//                frame->buf[0] = av_buffer_create(NULL,
+//                                         0,
+//                                         amf_free_amfsurface,
+//                                         pSurface,
+//                                         AV_BUFFER_FLAG_READONLY);
+//                pSurface->pVtbl->Acquire(pSurface);
+//            }
+//            break;
+//    #endif
+//    #if CONFIG_DXVA2
+//            case AMF_MEMORY_DX9:
+//            {
+//                AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
+//                frame->data[3] = plane0->pVtbl->GetNative(plane0);
 
-                frame->buf[0] = av_buffer_create(NULL,
-                                         0,
-                                         amf_free_amfsurface,
-                                         pSurface,
-                                         AV_BUFFER_FLAG_READONLY);
-                pSurface->pVtbl->Acquire(pSurface);
-            }
-            break;
-    #endif
-        default:
-            {
+//                frame->buf[0] = av_buffer_create(NULL,
+//                                         0,
+//                                         amf_free_amfsurface,
+//                                         pSurface,
+//                                         AV_BUFFER_FLAG_READONLY);
+//                pSurface->pVtbl->Acquire(pSurface);
+//            }
+//            break;
+//    #endif
+//        default:
+//            {
                 ret = pSurface->pVtbl->Convert(pSurface, AMF_MEMORY_HOST);
                 AMF_RETURN_IF_FALSE(avctx, ret == AMF_OK, AMF_UNEXPECTED, L"Convert(amf::AMF_MEMORY_HOST) failed with error %d\n");
 
@@ -295,8 +295,8 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* pS
                                                      amf_free_amfsurface,
                                                      pSurface,
                                                      AV_BUFFER_FLAG_READONLY);
-            }
-        }
+//            }
+//        }
 
 //    for (i = 0; i < pSurface->pVtbl->GetPlanesCount(pSurface); i++)
 //    {
