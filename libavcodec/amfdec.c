@@ -19,16 +19,18 @@ static int amf_init_decoder(AVCodecContext *avctx)
     AvAmfDecoderContext        *ctx = avctx->priv_data;
     const wchar_t     *codec_id = NULL;
     AMF_RESULT         res;
-    enum AMF_SURFACE_FORMAT formatOut = AMF_SURFACE_P010;
+    enum AMF_SURFACE_FORMAT formatOut;
     AMFBuffer * buffer;
-    //enum AVPixelFormat pix_fmt = avctx->sw_pix_fmt;
+    enum AVPixelFormat pix_fmt = avctx->sw_pix_fmt;
 
     switch (avctx->codec->id) {
         case AV_CODEC_ID_H264:
             codec_id = AMFVideoDecoderUVD_H264_AVC;
+            formatOut = AMF_SURFACE_NV12;
             break;
         case AV_CODEC_ID_HEVC:
-            codec_id = AMFVideoDecoderHW_H265_MAIN10;
+            codec_id = pix_fmt == AV_PIX_FMT_YUV420P10 ? AMFVideoDecoderHW_H265_MAIN10 : AMFVideoDecoderHW_H265_HEVC;
+            formatOut = pix_fmt == AV_PIX_FMT_YUV420P10 ? AMF_SURFACE_P010 : AMF_SURFACE_NV12;
             break;
         default:
             break;
@@ -303,13 +305,17 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* pS
 //        frame->linesize[i] = plane->pVtbl->GetHPitch(plane);
 //    }
 
-    frame->color_trc = AVCOL_TRC_SMPTE2084;
-    frame->colorspace = AVCOL_SPC_BT2020_NCL;
-    frame->color_range = AVCOL_RANGE_MPEG;
-    frame->color_primaries = AVCOL_PRI_BT2020;
+    //frame->color_trc = AVCOL_TRC_SMPTE2084;
+    //frame->colorspace = AVCOL_SPC_BT2020_NCL;
+    //frame->color_range = AVCOL_RANGE_MPEG;
+    //frame->color_primaries = AVCOL_PRI_BT2020;
     frame->format = amf_to_av_format(pSurface->pVtbl->GetFormat(pSurface));
     frame->width  = avctx->width;
     frame->height = avctx->height;
+    frame->color_trc = avctx->color_trc;
+    frame->colorspace = avctx->colorspace;
+    frame->color_range = avctx->color_range;
+    frame->color_primaries = avctx->color_primaries;
 
     frame->pkt_pts = pSurface->pVtbl->GetPts(pSurface);
 
