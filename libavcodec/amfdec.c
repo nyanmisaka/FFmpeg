@@ -19,7 +19,7 @@ static int amf_init_decoder(AVCodecContext *avctx)
     AvAmfDecoderContext        *ctx = avctx->priv_data;
     const wchar_t     *codec_id = NULL;
     AMF_RESULT         res;
-    enum AMF_SURFACE_FORMAT formatOut = AMF_SURFACE_NV12;
+    enum AMF_SURFACE_FORMAT formatOut = AMF_SURFACE_P010;
     AMFBuffer * buffer;
     //enum AVPixelFormat pix_fmt = avctx->sw_pix_fmt;
 
@@ -28,7 +28,7 @@ static int amf_init_decoder(AVCodecContext *avctx)
             codec_id = AMFVideoDecoderUVD_H264_AVC;
             break;
         case AV_CODEC_ID_HEVC:
-            codec_id = AMFVideoDecoderHW_H265_HEVC;
+            codec_id = AMFVideoDecoderHW_H265_MAIN10;
             break;
         default:
             break;
