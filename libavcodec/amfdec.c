@@ -23,6 +23,8 @@ static int amf_init_decoder(AVCodecContext *avctx)
     AMFBuffer * buffer;
     enum AVPixelFormat pix_fmt = avctx->sw_pix_fmt;
 
+    av_log(avctx, AV_LOG_ERROR, "sw_pix_fmt is %d.\n", pix_fmt);
+
     switch (avctx->codec->id) {
         case AV_CODEC_ID_H264:
             codec_id = AMFVideoDecoderUVD_H264_AVC;
