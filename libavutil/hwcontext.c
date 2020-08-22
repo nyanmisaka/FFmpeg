@@ -29,6 +29,9 @@
 #include "pixfmt.h"
 
 static const HWContextType * const hw_table[] = {
+#if CONFIG_AMF
+    &ff_hwcontext_type_amf,
+#endif
 #if CONFIG_CUDA
     &ff_hwcontext_type_cuda,
 #endif
@@ -66,6 +69,7 @@ static const HWContextType * const hw_table[] = {
 };
 
 static const char *const hw_type_names[] = {
+    [AV_HWDEVICE_TYPE_AMF]    = "amf",
     [AV_HWDEVICE_TYPE_CUDA]   = "cuda",
     [AV_HWDEVICE_TYPE_DRM]    = "drm",
     [AV_HWDEVICE_TYPE_DXVA2]  = "dxva2",

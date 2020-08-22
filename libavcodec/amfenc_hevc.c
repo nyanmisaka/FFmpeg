@@ -58,6 +58,13 @@ static const AVOption options[] = {
     { "speed",          "", 0, AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_SPEED    }, 0, 0, VE, "quality" },
     { "quality",        "", 0, AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_QUALITY  }, 0, 0, VE, "quality" },
 
+#if defined(_WIN32)
+    /// Preffered engine
+    { "engine",         "Preffered engine",                     OFFSET(engine),     AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_ENCODER_ENGINE_DEFAULT},      AMF_VIDEO_ENCODER_ENGINE_DEFAULT, AMF_VIDEO_ENCODER_ENGINE_VULKAN, VE, "engine" },
+    { "dxva2",          "DirectX Video Acceleration 2",         0,                  AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_ENCODER_ENGINE_DXVA2    },    0, 0, VE, "engine" },
+    { "d3d11",          "Direct3D11",                           0,                  AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_ENCODER_ENGINE_D3D11   },     0, 0, VE, "engine" },
+    { "vulkan",         "Vulkan",                               0,                  AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_ENCODER_ENGINE_VULKAN },      0, 0, VE, "engine" },
+#endif
     { "rc",             "Set the rate control mode",            OFFSET(rate_control_mode), AV_OPT_TYPE_INT, { .i64 = AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_UNKNOWN }, AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_UNKNOWN, AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_CBR, VE, "rc" },
     { "cqp",            "Constant Quantization Parameter",      0, AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_CONSTANT_QP             }, 0, 0, VE, "rc" },
     { "cbr",            "Constant Bitrate",                     0, AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_CBR                     }, 0, 0, VE, "rc" },
