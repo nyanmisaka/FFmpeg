@@ -3,6 +3,7 @@
 const FormatMap format_map[] =
 {
     { AV_PIX_FMT_NV12,       AMF_SURFACE_NV12 },
+    { AV_PIX_FMT_P010,       AMF_SURFACE_P010 },
 
     { AV_PIX_FMT_BGR0,       AMF_SURFACE_BGRA },
     { AV_PIX_FMT_BGRA,       AMF_SURFACE_BGRA },
