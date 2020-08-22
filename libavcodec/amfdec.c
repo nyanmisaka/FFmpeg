@@ -303,6 +303,10 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* pS
 //        frame->linesize[i] = plane->pVtbl->GetHPitch(plane);
 //    }
 
+    frame->color_trc = AVCOL_TRC_SMPTE2084;
+    frame->colorspace = AVCOL_SPC_BT2020_NCL;
+    frame->color_range = AVCOL_RANGE_MPEG;
+    frame->color_primaries = AVCOL_PRI_BT2020;
     frame->format = amf_to_av_format(pSurface->pVtbl->GetFormat(pSurface));
     frame->width  = avctx->width;
     frame->height = avctx->height;
