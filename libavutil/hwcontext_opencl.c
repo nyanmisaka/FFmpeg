@@ -2586,6 +2586,7 @@ static int opencl_map_from_d3d11(AVHWFramesContext *dst_fc, AVFrame *dst,
     }
 
     err = opencl_wait_events(dst_fc, &event, 1);
+    av_log(dst_fc, AV_LOG_ERROR, "opencl_wait_events\n");
     if (err < 0)
         goto fail;
 
@@ -2600,6 +2601,7 @@ static int opencl_map_from_d3d11(AVHWFramesContext *dst_fc, AVFrame *dst,
                 goto fail;
             }
         }
+        av_log(dst_fc, AV_LOG_ERROR, "clGetPlaneFromImageAMD\n");
     } else if (device_priv->d3d11_map_intel) {
         for (i = 0; i < desc->nb_planes; i++)
             dst->data[i] = (uint8_t*)desc->planes[i];
@@ -2609,6 +2611,7 @@ static int opencl_map_from_d3d11(AVHWFramesContext *dst_fc, AVFrame *dst,
 
     err = ff_hwframe_map_create(dst->hw_frames_ctx, dst, src,
                                 &opencl_unmap_from_d3d11, desc);
+    av_log(dst_fc, AV_LOG_ERROR, "ff_hwframe_map_create\n");
     if (err < 0)
         goto fail;
 
@@ -2683,6 +2686,41 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
         AVOpenCLFrameDescriptor *desc = &frames_priv->mapped_frames[i];
         desc->nb_planes = nb_planes;
         if (device_priv->d3d11_map_amd) {
+
+            // copy dx11 decoding texture to staging texture
+/*             HRESULT hr;
+            ID3D11Texture2D *staging;
+            D3D11_TEXTURE2D_DESC texDesc = {
+                .Width          = src_fc->width,
+                .Height         = src_fc->height,
+                .MipLevels      = 1,
+                .Format         = DXGI_FORMAT_NV12,
+                .SampleDesc     = { .Count = 1 },
+                .ArraySize      = 1,
+                .Usage          = D3D11_USAGE_DEFAULT,
+                .BindFlags      = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+                .MiscFlags      = D3D11_RESOURCE_MISC_SHARED,
+            };
+
+            src_dev->lock(src_dev->lock_ctx);
+            hr = ID3D11Device_CreateTexture2D(src_dev->device, &texDesc, NULL, &staging);
+            if (FAILED(hr)) {
+                av_log(dst_fc, AV_LOG_ERROR, "Could not create the staging texture (%lx)\n", (long)hr);
+                goto fail;
+            }
+
+            D3D11_BOX srcBox = {0, 0, 0, 2, 2, 1};
+            av_log(dst_fc, AV_LOG_ERROR, "Before CopySubresourceRegion.\n");
+            if (src_hwctx->texture) {
+                ID3D11DeviceContext_CopySubresourceRegion(src_dev->device_context,
+                                                          staging, 0, 0, 0, 0,
+                                                          src_hwctx->texture, i, &srcBox);
+            }
+
+            ID3D11DeviceContext_Flush(src_dev->device_context);
+            av_log(dst_fc, AV_LOG_ERROR, "After CopySubresourceRegion.\n");
+            src_dev->unlock(src_dev->lock_ctx); */
+
             desc->planes[0] = device_priv->clCreateFromD3D11Texture2DKHR(
                 dst_dev->context, cl_flags, src_hwctx->texture, i, &cle);
             if (!desc->planes[0]) {
