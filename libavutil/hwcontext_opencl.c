@@ -2615,9 +2615,11 @@ static int opencl_map_from_d3d11(AVHWFramesContext *dst_fc, AVFrame *dst,
     dst->width  = src->width;
     dst->height = src->height;
 
+    av_log(dst_fc, AV_LOG_ERROR, "[success] opencl_map_from_d3d11\n");
     return 0;
 
 fail:
+    av_log(dst_fc, AV_LOG_ERROR, "[fail] opencl_map_from_d3d11\n");
     if (device_priv->d3d11_map_amd) {
         cle = device_priv->clEnqueueReleaseD3D11ObjectsKHR(
             frames_priv->command_queue, 1, desc->planes[0],
