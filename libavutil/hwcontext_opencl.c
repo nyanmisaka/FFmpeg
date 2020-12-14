@@ -2592,7 +2592,7 @@ static int opencl_map_from_d3d11(AVHWFramesContext *dst_fc, AVFrame *dst,
     // process only one surface at a time
     if (device_priv->d3d11_map_amd) {
         for (i = 0; i < desc->nb_planes; i++) {
-            dst->data[i] = device_priv->clGetPlaneFromImageAMD(
+            dst->data[i] = (uint8_t*)device_priv->clGetPlaneFromImageAMD(
                 dst_dev->context, desc->planes[0], i, &cle);
             if (!dst->data[i]) {
                 av_log(dst_fc, AV_LOG_ERROR, "Failed to create CL image "
