@@ -68,7 +68,7 @@ typedef struct __device_builtin__ __align__(4) uchar4
 
 typedef struct __device_builtin__ __align__(8) ushort4
 {
-    unsigned char x, y, z, w;
+    unsigned short x, y, z, w;
 } ushort4;
 
 typedef struct __device_builtin__ __align__(16) int4
@@ -110,10 +110,10 @@ GET(getThreadIdx, tid)
 
 TEX2D(unsigned char, a & 0xFF)
 TEX2D(unsigned short, a & 0xFFFF)
-TEX2D(uchar2, make_uchar2(a & 0xFF, b & 0xFF))
-TEX2D(ushort2, make_ushort2(a & 0xFFFF, b & 0xFFFF))
-TEX2D(uchar4, make_uchar4(a & 0xFF, b & 0xFF, c & 0xFF, d & 0xFF))
-TEX2D(ushort4, make_ushort4(a & 0xFFFF, b & 0xFFFF, c & 0xFFFF, d & 0xFFFF))
+TEX2D(uchar2, make_uchar2((unsigned char)a, (unsigned char)b))
+TEX2D(ushort2, make_ushort2((unsigned short)a, (unsigned short)b))
+TEX2D(uchar4, make_uchar4((unsigned char)a, (unsigned char)b, (unsigned char)c, (unsigned char)d))
+TEX2D(ushort4, make_ushort4((unsigned short)a, (unsigned short)b, (unsigned short)c, (unsigned short)d))
 
 // Template calling tex instruction and converting the output to the selected type
 template <class T>
