@@ -580,7 +580,11 @@ static int opt_init_hw_device(void *optctx, const char *opt, const char *arg)
         printf("\n");
         exit_program(0);
     } else {
-        return hw_device_init_from_string(arg, NULL);
+        int err;
+        if (!arg)
+            return AVERROR(ENOMEM);
+        err = hw_device_init_from_string(arg, NULL);
+        return err;
     }
 }
 

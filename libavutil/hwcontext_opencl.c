@@ -2249,7 +2249,8 @@ static int opencl_map_from_qsv(AVHWFramesContext *dst_fc, AVFrame *dst,
 #if CONFIG_LIBMFX
     if (src->format == AV_PIX_FMT_QSV) {
         mfxFrameSurface1 *mfx_surface = (mfxFrameSurface1*)src->data[3];
-        va_surface = *(VASurfaceID*)mfx_surface->Data.MemId;
+        mfxHDLPair *pPair = (mfxHDLPair *)mfx_surface->Data.MemId;
+        va_surface = *(VASurfaceID*)pPair->first;
     } else
 #endif
         if (src->format == AV_PIX_FMT_VAAPI) {

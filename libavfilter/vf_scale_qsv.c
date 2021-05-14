@@ -70,6 +70,7 @@ enum var_name {
 };
 
 #define QSV_HAVE_SCALING_CONFIG  QSV_VERSION_ATLEAST(1, 19)
+#define MFX_IMPL_VIA_MASK(impl) (0x0f00 & (impl))
 
 typedef struct QSVScaleContext {
     const AVClass *class;
@@ -206,7 +207,7 @@ static int init_out_pool(AVFilterContext *ctx,
     out_frames_ctx->sw_format         = out_format;
     out_frames_ctx->initial_pool_size = 4;
 
-    out_frames_hwctx->frame_type = in_frames_hwctx->frame_type;
+    out_frames_hwctx->frame_type = in_frames_hwctx->frame_type | MFX_MEMTYPE_FROM_VPPOUT;
 
     ret = ff_filter_init_hw_frames(ctx, outlink, 32);
     if (ret < 0)
@@ -264,15 +265,15 @@ static mfxStatus frame_unlock(mfxHDL pthis, mfxMemId mid, mfxFrameData *ptr)
 
 static mfxStatus frame_get_hdl(mfxHDL pthis, mfxMemId mid, mfxHDL *hdl)
 {
-    *hdl = mid;
+    mfxHDLPair *pair_dst = (mfxHDLPair*)hdl;
+    mfxHDLPair *pair_src = (mfxHDLPair*)mid;
+
+    pair_dst->first = pair_src->first;
+
+    if (pair_src->second != (mfxMemId)MFX_INFINITE)
+        pair_dst->second = pair_src->second;
     return MFX_ERR_NONE;
 }
-
-static const mfxHandleType handle_types[] = {
-    MFX_HANDLE_VA_DISPLAY,
-    MFX_HANDLE_D3D9_DEVICE_MANAGER,
-    MFX_HANDLE_D3D11_DEVICE,
-};
 
 static int init_out_session(AVFilterContext *ctx)
 {
@@ -292,31 +293,36 @@ static int init_out_session(AVFilterContext *ctx)
     mfxIMPL impl;
     mfxVideoParam par;
     mfxStatus err;
-    int i;
+    int ret, i;
 
     s->num_ext_buf = 0;
 
     /* extract the properties of the "master" session given to us */
-    err = MFXQueryIMPL(device_hwctx->session, &impl);
-    if (err == MFX_ERR_NONE)
-        err = MFXQueryVersion(device_hwctx->session, &ver);
-    if (err != MFX_ERR_NONE) {
+    ret = MFXQueryIMPL(device_hwctx->session, &impl);
+    if (ret == MFX_ERR_NONE)
+        ret = MFXQueryVersion(device_hwctx->session, &ver);
+    if (ret != MFX_ERR_NONE) {
         av_log(ctx, AV_LOG_ERROR, "Error querying the session attributes\n");
         return AVERROR_UNKNOWN;
     }
 
-    for (i = 0; i < FF_ARRAY_ELEMS(handle_types); i++) {
-        err = MFXVideoCORE_GetHandle(device_hwctx->session, handle_types[i], &handle);
-        if (err == MFX_ERR_NONE) {
-            handle_type = handle_types[i];
-            break;
-        }
+    if (MFX_IMPL_VIA_VAAPI == MFX_IMPL_VIA_MASK(impl)) {
+        handle_type = MFX_HANDLE_VA_DISPLAY;
+    } else if (MFX_IMPL_VIA_D3D11 == MFX_IMPL_VIA_MASK(impl)) {
+        handle_type = MFX_HANDLE_D3D11_DEVICE;
+    } else if (MFX_IMPL_VIA_D3D9 == MFX_IMPL_VIA_MASK(impl)) {
+        handle_type = MFX_HANDLE_D3D9_DEVICE_MANAGER;
+    } else {
+        av_log(ctx, AV_LOG_ERROR, "Error unsupported handle type\n");
+        return AVERROR_UNKNOWN;
     }
 
-    if (err < 0)
-        return ff_qsvvpp_print_error(ctx, err, "Error getting the session handle");
-    else if (err > 0) {
-        ff_qsvvpp_print_warning(ctx, err, "Warning in getting the session handle");
+    ret = MFXVideoCORE_GetHandle(device_hwctx->session, handle_type, &handle);
+
+    if (ret < 0)
+        return ff_qsvvpp_print_error(ctx, ret, "Error getting the session handle");
+    else if (ret > 0) {
+        ff_qsvvpp_print_warning(ctx, ret, "Warning in getting the session handle");
         return AVERROR_UNKNOWN;
     }
 

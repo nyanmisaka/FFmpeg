@@ -164,6 +164,13 @@ typedef struct AVD3D11VAFramesContext {
      * This field is ignored/invalid if a user-allocated texture is provided.
      */
     UINT MiscFlags;
+
+    /**
+     * Holder of ID3D11Texture2D single textures
+     * when BindFlags is equal to D3D11_BIND_RENDER_TARGET.
+     * This field is ignored/invalid if a user-allocated texture is provided.
+     */
+    AVD3D11FrameDescriptor *texture_infos;
 } AVD3D11VAFramesContext;
 
 #endif /* AVUTIL_HWCONTEXT_D3D11VA_H */
