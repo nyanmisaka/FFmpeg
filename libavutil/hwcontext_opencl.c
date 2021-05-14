@@ -2576,8 +2576,9 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
     cl_int cle;
     int err, i, p, nb_planes;
 
-    if (src_fc->sw_format != AV_PIX_FMT_NV12) {
-        av_log(dst_fc, AV_LOG_ERROR, "Only NV12 textures are supported "
+    if (src_fc->sw_format != AV_PIX_FMT_NV12 &&
+        src_fc->sw_format != AV_PIX_FMT_P010) {
+        av_log(dst_fc, AV_LOG_ERROR, "Only NV12 and P010 textures are supported "
                "for D3D11 to OpenCL mapping.\n");
         return AVERROR(EINVAL);
     }
