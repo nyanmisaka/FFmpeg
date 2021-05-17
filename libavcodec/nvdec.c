@@ -410,9 +410,16 @@ int ff_nvdec_decode_init(AVCodecContext *avctx)
                    (int)params.ulNumDecodeSurfaces);
             av_log(avctx, AV_LOG_WARNING, "Try lowering the amount of threads. Using %d right now.\n",
                    avctx->thread_count);
+            av_log(avctx, AV_LOG_WARNING, "Retrying with 32 decode surfaces.\n");
+            params.ulNumDecodeSurfaces = 32;
+            params.ulNumOutputSurfaces = 32;
+            ret = nvdec_decoder_create(&ctx->decoder_ref, frames_ctx->device_ref, &params, avctx);
         }
-        av_buffer_unref(&real_hw_frames_ref);
-        return ret;
+
+        if (ret < 0) {
+            av_buffer_unref(&real_hw_frames_ref);
+            return ret;
+        }
     }
 
     decoder = (NVDECDecoder*)ctx->decoder_ref->data;
