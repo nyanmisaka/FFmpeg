@@ -414,6 +414,7 @@ extern AVFilter ff_vf_stereo3d;
 extern AVFilter ff_vf_streamselect;
 extern AVFilter ff_vf_subtitles;
 extern AVFilter ff_vf_super2xsai;
+extern AVFilter ff_vf_supertonemap;
 extern AVFilter ff_vf_swaprect;
 extern AVFilter ff_vf_swapuv;
 extern AVFilter ff_vf_tblend;
