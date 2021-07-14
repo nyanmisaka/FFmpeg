@@ -122,6 +122,50 @@ static __inline__ __device__ void write_yuv420p_2x2(const FFCUDAFrame& frame, in
     write_sample<2>(frame, x / 2, y / 2, (unsigned char)chroma.z);
 }
 
+static __inline__ __device__ void write_p016_2x2(const FFCUDAFrame& frame, int x, int y, ushort3 a, ushort3 b, ushort3 c, ushort3 d, ushort3 chroma)
+{
+    write_sample<0>(frame, x,     y,     (unsigned short)a.x);
+    write_sample<0>(frame, x + 1, y,     (unsigned short)b.x);
+    write_sample<0>(frame, x,     y + 1, (unsigned short)c.x);
+    write_sample<0>(frame, x + 1, y + 1, (unsigned short)d.x);
+
+    write_sample<1>(frame, (x & ~1),     y / 2, (unsigned short)chroma.y);
+    write_sample<1>(frame, (x & ~1) + 1, y / 2, (unsigned short)chroma.z);
+}
+
+static __inline__ __device__ void write_p010_2x2(const FFCUDAFrame& frame, int x, int y, ushort3 a, ushort3 b, ushort3 c, ushort3 d, ushort3 chroma)
+{
+    write_sample<0>(frame, x,     y,     (unsigned short)(a.x << 6));
+    write_sample<0>(frame, x + 1, y,     (unsigned short)(b.x << 6));
+    write_sample<0>(frame, x,     y + 1, (unsigned short)(c.x << 6));
+    write_sample<0>(frame, x + 1, y + 1, (unsigned short)(d.x << 6));
+
+    write_sample<1>(frame, (x & ~1),     y / 2, (unsigned short)(chroma.y << 6));
+    write_sample<1>(frame, (x & ~1) + 1, y / 2, (unsigned short)(chroma.z << 6));
+}
+
+static __inline__ __device__ void write_yuv420p16_2x2(const FFCUDAFrame& frame, int x, int y, ushort3 a, ushort3 b, ushort3 c, ushort3 d, ushort3 chroma)
+{
+    write_sample<0>(frame, x,     y,     (unsigned short)a.x);
+    write_sample<0>(frame, x + 1, y,     (unsigned short)b.x);
+    write_sample<0>(frame, x,     y + 1, (unsigned short)c.x);
+    write_sample<0>(frame, x + 1, y + 1, (unsigned short)d.x);
+
+    write_sample<1>(frame, x / 2, y / 2, (unsigned short)chroma.y);
+    write_sample<2>(frame, x / 2, y / 2, (unsigned short)chroma.z);
+}
+
+static __inline__ __device__ void write_yuv420p10_2x2(const FFCUDAFrame& frame, int x, int y, ushort3 a, ushort3 b, ushort3 c, ushort3 d, ushort3 chroma)
+{
+    write_sample<0>(frame, x,     y,     (unsigned short)(a.x << 6));
+    write_sample<0>(frame, x + 1, y,     (unsigned short)(b.x << 6));
+    write_sample<0>(frame, x,     y + 1, (unsigned short)(c.x << 6));
+    write_sample<0>(frame, x + 1, y + 1, (unsigned short)(d.x << 6));
+
+    write_sample<1>(frame, x / 2, y / 2, (unsigned short)(chroma.y << 6));
+    write_sample<2>(frame, x / 2, y / 2, (unsigned short)(chroma.z << 6));
+}
+
 // Generic write functions
 static __inline__ __device__ void write_2x2(const FFCUDAFrame& frame, int x, int y, ushort3 a, ushort3 b, ushort3 c, ushort3 d, ushort3 chroma)
 {
@@ -129,6 +173,10 @@ static __inline__ __device__ void write_2x2(const FFCUDAFrame& frame, int x, int
         write_yuv420p_2x2(frame, x, y, a, b, c, d, chroma);
     else if (fmt_dst == AV_PIX_FMT_NV12)
         write_nv12_2x2(frame, x, y, a, b, c, d, chroma);
+    else if (fmt_dst == AV_PIX_FMT_P016)
+        write_p016_2x2(frame, x, y, a, b, c, d, chroma);
+    else if (fmt_dst == AV_PIX_FMT_P010)
+        write_p010_2x2(frame, x, y, a, b, c, d, chroma);
 }
 
 static __inline__ __device__ unsigned short sample_to_ushort(float flt)
