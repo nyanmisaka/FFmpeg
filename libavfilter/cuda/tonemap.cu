@@ -27,6 +27,7 @@
 
 extern const enum TonemapAlgorithm tonemap_func;
 extern const float tone_param;
+extern const float desat_param;
 
 #define mix(x, y, a) ((x) + ((y) - (x)) * (a))
 
@@ -127,15 +128,15 @@ float3 map_one_pixel_rgb(float3 rgb, const FFCUDAFrame& src, const FFCUDAFrame& 
     */
 
     // Desaturate the color using a coefficient dependent on the signal level
-    /*
     if (desat_param > 0.0f) {
-        float luma = dstSpace.getLuma(rgb);
+        float luma = get_luma_dst(rgb, luma_dst);
         float coeff = max(sig - 0.18f, 1e-6f) / max(sig, 1e-6f);
         coeff = __powf(coeff, 10.0f / desat_param);
-        rgb = mix(rgb, (float3)luma, (float3)coeff);
+        rgb = mix(rgb, make_float3(luma, luma, luma), make_float3(coeff, coeff, coeff));
+        /*
         sig = mix(sig, luma * slope, coeff);
+        */
     }
-    */
 
     sig = map(sig, peak);
 

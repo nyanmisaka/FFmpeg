@@ -359,6 +359,7 @@ static av_cold int compile(AVFilterLink *inlink)
     CONSTANT(".u32 chroma_loc_dst = %i", (int)s->out_chroma_loc);
     CONSTANT(".u32 tonemap_func   = %i", (int)s->tonemap);
     CONSTANT(".f32 tone_param     = %f", s->param);
+    CONSTANT(".f32 desat_param    = %f", s->desat_param);
     CONSTANT_M("rgb_matrix", rgb_matrix);
     CONSTANT_M("yuv_matrix", yuv_matrix);
     CONSTANT_A(".u8 rgb2rgb_passthrough = %i", 1, in_pri == out_pri);
