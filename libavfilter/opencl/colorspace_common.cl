@@ -59,6 +59,14 @@ float eotf_st2084(float x) {
     return x > 0.0f ? c * ST2084_MAX_LUMINANCE / REFERENCE_WHITE : 0.0f;
 }
 
+float inverse_eotf_st2084(float x) {
+    float a = x;
+    x *= REFERENCE_WHITE / ST2084_MAX_LUMINANCE;
+    x = powr(x, ST2084_M1);
+    x = (ST2084_C1 + ST2084_C2 * x) / (1.0f + ST2084_C3 * x);
+    return a > 0.0f ? powr(x, ST2084_M2) : 0.0f;
+}
+
 __constant const float HLG_A = 0.17883277f;
 __constant const float HLG_B = 0.28466892f;
 __constant const float HLG_C = 0.55991073f;

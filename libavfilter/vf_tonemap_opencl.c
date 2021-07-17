@@ -46,6 +46,7 @@ enum TonemapAlgorithm {
     TONEMAP_REINHARD,
     TONEMAP_HABLE,
     TONEMAP_MOBIUS,
+    TONEMAP_BT2390,
     TONEMAP_MAX,
 };
 
@@ -99,6 +100,7 @@ static const char *const tonemap_func[TONEMAP_MAX] = {
     [TONEMAP_REINHARD] = "reinhard",
     [TONEMAP_HABLE]    = "hable",
     [TONEMAP_MOBIUS]   = "mobius",
+    [TONEMAP_BT2390]   = "bt2390",
 };
 
 static void get_rgb2rgb_matrix(enum AVColorPrimaries in, enum AVColorPrimaries out,
@@ -495,6 +497,7 @@ static const AVOption tonemap_opencl_options[] = {
     {     "reinhard", 0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_REINHARD},          0, 0, FLAGS, "tonemap" },
     {     "hable",    0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_HABLE},             0, 0, FLAGS, "tonemap" },
     {     "mobius",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_MOBIUS},            0, 0, FLAGS, "tonemap" },
+    {     "bt2390",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_BT2390},            0, 0, FLAGS, "tonemap" },
     { "transfer", "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, {.i64 = AVCOL_TRC_BT709}, -1, INT_MAX, FLAGS, "transfer" },
     { "t",        "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, {.i64 = AVCOL_TRC_BT709}, -1, INT_MAX, FLAGS, "transfer" },
     {     "bt709",            0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_TRC_BT709},         0, 0, FLAGS, "transfer" },

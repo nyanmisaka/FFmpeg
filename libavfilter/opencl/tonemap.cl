@@ -23,6 +23,8 @@ extern float3 yuv2lrgb(float3);
 extern float3 lrgb2lrgb(float3);
 extern float  get_luma_src(float3);
 extern float  get_luma_dst(float3);
+extern float  eotf_st2084(float);
+extern float  inverse_eotf_st2084(float);
 extern float3 ootf(float3 c, float peak);
 extern float3 inverse_ootf(float3 c, float peak);
 extern float3 get_chroma_sample(float3, float3, float3, float3);
@@ -37,33 +39,33 @@ float hable_f(float in) {
     return (in * (in * a + b * c) + d * e) / (in * (in * a + b) + d * f) - e / f;
 }
 
-float direct(float s, float peak) {
+float direct(float s, float peak, float target_peak) {
     return s;
 }
 
-float linear(float s, float peak) {
+float linear(float s, float peak, float target_peak) {
     return s * tone_param / peak;
 }
 
-float gamma(float s, float peak) {
+float gamma(float s, float peak, float target_peak) {
     float p = s > 0.05f ? s /peak : 0.05f / peak;
     float v = powr(p, 1.0f / tone_param);
     return s > 0.05f ? v : (s * v /0.05f);
 }
 
-float clip(float s, float peak) {
+float clip(float s, float peak, float target_peak) {
     return clamp(s * tone_param, 0.0f, 1.0f);
 }
 
-float reinhard(float s, float peak) {
+float reinhard(float s, float peak, float target_peak) {
     return s / (s + tone_param) * (peak + tone_param) / peak;
 }
 
-float hable(float s, float peak) {
+float hable(float s, float peak, float target_peak) {
     return hable_f(s)/hable_f(peak);
 }
 
-float mobius(float s, float peak) {
+float mobius(float s, float peak, float target_peak) {
     float j = tone_param;
     float a, b;
 
@@ -74,6 +76,25 @@ float mobius(float s, float peak) {
     b = (j * j - 2.0f * j * peak + peak) / max(peak - 1.0f, 1e-6f);
 
     return (b * b + 2.0f * b * j + j * j) / (b - a) * (s + a) / (s + b);
+}
+
+float bt2390(float s, float peak, float target_peak) {
+    float peak_pq = inverse_eotf_st2084(peak);
+    float scale = 1.0f / peak_pq;
+
+    float s_pq = inverse_eotf_st2084(s) * scale;
+    float maxLum = inverse_eotf_st2084(target_peak) * scale;
+
+    float ks = 1.5f * maxLum - 0.5f;
+    float tb = (s_pq - ks) / (1.0f - ks);
+    float tb2 = tb * tb;
+    float tb3 = tb2 * tb;
+    float pb = (2.0f * tb3 - 3.0f * tb2 + 1.0f) * ks +
+               (tb3 - 2.0f * tb2 + tb) * (1.0f - ks) +
+               (-2.0f * tb3 + 3.0f * tb2) * maxLum;
+    float sig = (s_pq < ks) ? s_pq : pb;
+
+    return eotf_st2084(sig * peak_pq);
 }
 
 // detect peak/average signal of a frame, the algorithm was ported from:
@@ -196,7 +217,7 @@ float3 map_one_pixel_rgb(float3 rgb, float peak, float average) {
         */
     }
 
-    sig = TONE_FUNC(sig, peak);
+    sig = TONE_FUNC(sig, peak, target_peak);
 
     sig = min(sig, 1.0f);
     rgb *= (sig/sig_old);
