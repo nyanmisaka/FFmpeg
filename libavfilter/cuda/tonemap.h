@@ -31,6 +31,7 @@ enum TonemapAlgorithm {
     TONEMAP_REINHARD,
     TONEMAP_HABLE,
     TONEMAP_MOBIUS,
+    TONEMAP_BT2390,
     TONEMAP_MAX,
 };
 

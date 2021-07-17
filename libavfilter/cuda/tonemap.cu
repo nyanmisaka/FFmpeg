@@ -84,7 +84,27 @@ float mobius(float s, float peak) {
 }
 
 static __inline__ __device__
-float map(float s, float peak)
+float bt2390(float s, float peak, float dst_peak) {
+    float peak_pq = inverse_eotf_st2084(peak);
+    float scale = 1.0f / peak_pq;
+
+    float s_pq = inverse_eotf_st2084(s) * scale;
+    float maxLum = inverse_eotf_st2084(dst_peak) * scale;
+
+    float ks = 1.5f * maxLum - 0.5f;
+    float tb = (s_pq - ks) / (1.0f - ks);
+    float tb2 = tb * tb;
+    float tb3 = tb2 * tb;
+    float pb = (2.0f * tb3 - 3.0f * tb2 + 1.0f) * ks +
+               (tb3 - 2.0f * tb2 + tb) * (1.0f - ks) +
+               (-2.0f * tb3 + 3.0f * tb2) * maxLum;
+    float sig = (s_pq < ks) ? s_pq : pb;
+
+    return eotf_st2084(sig * peak_pq);
+}
+
+static __inline__ __device__
+float map(float s, float peak, float dst_peak)
 {
     switch (tonemap_func) {
     case TONEMAP_NONE:
@@ -102,6 +122,8 @@ float map(float s, float peak)
         return hable(s, peak);
     case TONEMAP_MOBIUS:
         return mobius(s, peak);
+    case TONEMAP_BT2390:
+        return bt2390(s, peak, dst_peak);
     }
 }
 
@@ -109,6 +131,7 @@ static __inline__ __device__
 float3 map_one_pixel_rgb(float3 rgb, const FFCUDAFrame& src, const FFCUDAFrame& dst) {
     float sig = max(max(rgb.x, max(rgb.y, rgb.z)), 1e-6f);
     float peak = src.peak;
+    float dst_peak = dst.peak;
 
     // Rescale the variables in order to bring it into a representation where
     // 1.0 represents the dst_peak. This is because all of the tone mapping
@@ -138,7 +161,7 @@ float3 map_one_pixel_rgb(float3 rgb, const FFCUDAFrame& src, const FFCUDAFrame& 
         */
     }
 
-    sig = map(sig, peak);
+    sig = map(sig, peak, dst_peak);
 
     sig = min(sig, 1.0f);
     rgb = rgb * (sig/sig_old);
