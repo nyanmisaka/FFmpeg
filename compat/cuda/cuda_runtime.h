@@ -143,7 +143,7 @@ static __inline__ __device__ float __exp2f(float x)
     return ret;
 }
 
-#define __expf(x) (__log2f((x) * 1.4427f))
+#define __expf(x) (__exp2f((x) * 1.4427f))
 
 static __inline__ __device__ float __log2f(float x)
 {
@@ -153,7 +153,7 @@ static __inline__ __device__ float __log2f(float x)
 }
 
 #define __logf(x) (__log2f((x)) * 0.693147f)
-#define __log10f(x) (__log2f((x) * 0.30103f))
+#define __log10f(x) (__log2f((x)) * 0.30103f)
 
 static __inline__ __device__ float __powf(float x, float y)
 {
