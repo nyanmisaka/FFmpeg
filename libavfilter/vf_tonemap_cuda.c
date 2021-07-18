@@ -71,10 +71,10 @@ typedef struct TonemapCUDAContext {
 
     enum AVPixelFormat in_fmt, out_fmt;
 
-    enum AVColorRange in_range, out_range;
-    enum AVColorTransferCharacteristic in_trc, out_trc;
-    enum AVColorSpace in_spc, out_spc;
-    enum AVColorPrimaries in_pri, out_pri;
+    enum AVColorRange range, in_range, out_range;
+    enum AVColorTransferCharacteristic trc, in_trc, out_trc;
+    enum AVColorSpace spc, in_spc, out_spc;
+    enum AVColorPrimaries pri, in_pri, out_pri;
     enum AVChromaLocation in_chroma_loc, out_chroma_loc;
 
     AVBufferRef *frames_ctx;
@@ -178,7 +178,7 @@ static av_cold int init_stage(TonemapCUDAContext *s, AVBufferRef *device_ctx,
 
     out_ctx->format    = AV_PIX_FMT_CUDA;
     out_ctx->sw_format = s->out_fmt;
-    out_ctx->width     = FFALIGN(outlink->w,  32);
+    out_ctx->width     = FFALIGN(outlink->w, 32);
     out_ctx->height    = FFALIGN(outlink->h, 32);
 
     ret = av_hwframe_ctx_init(out_ref);
@@ -220,6 +220,8 @@ static av_cold int init_processing_chain(AVFilterContext *ctx, AVFilterLink *out
 
     enum AVPixelFormat in_format;
     enum AVPixelFormat out_format;
+    const AVPixFmtDescriptor *in_desc;
+    const AVPixFmtDescriptor *out_desc;
     int ret;
 
     /* check that we have a hw context */
@@ -230,6 +232,8 @@ static av_cold int init_processing_chain(AVFilterContext *ctx, AVFilterLink *out
     in_frames_ctx = (AVHWFramesContext*)ctx->inputs[0]->hw_frames_ctx->data;
     in_format     = in_frames_ctx->sw_format;
     out_format    = (s->format == AV_PIX_FMT_NONE) ? in_format : s->format;
+    in_desc       = av_pix_fmt_desc_get(in_format);
+    out_desc      = av_pix_fmt_desc_get(out_format);
 
     if (!format_is_supported(in_format)) {
         av_log(ctx, AV_LOG_ERROR, "Unsupported input format: %s\n",
@@ -241,9 +245,17 @@ static av_cold int init_processing_chain(AVFilterContext *ctx, AVFilterLink *out
                av_get_pix_fmt_name(out_format));
         return AVERROR(ENOSYS);
     }
+    if (!(in_desc->comp[0].depth == 10 ||
+        in_desc->comp[0].depth == 16)) {
+        av_log(ctx, AV_LOG_ERROR, "Unsupported input format depth: %d\n",
+               in_desc->comp[0].depth);
+        return AVERROR(ENOSYS);
+    }
 
     s->in_fmt = in_format;
     s->out_fmt = out_format;
+    s->in_desc  = in_desc;
+    s->out_desc = out_desc;
 
     ret = init_stage(s, in_frames_ctx->device_ref, outlink);
     if (ret < 0)
@@ -291,7 +303,7 @@ static av_cold int compile(AVFilterLink *inlink)
     size_t cubin_size;
     double rgb_matrix[3][3], yuv_matrix[3][3], rgb2rgb_matrix[3][3];
     const struct LumaCoefficients *in_coeffs, *out_coeffs;
-    enum AVColorSpace in_spc = s->in_spc, out_spc = s->in_spc;
+    enum AVColorSpace in_spc = s->in_spc, out_spc = s->out_spc;
     enum AVColorPrimaries in_pri = s->in_pri, out_pri = s->out_pri;
     enum AVColorTransferCharacteristic in_trc = s->in_trc, out_trc = s->out_trc;
     char info_log[4096], error_log[4096];
@@ -347,7 +359,7 @@ static av_cold int compile(AVFilterLink *inlink)
     CONSTANT(".f32 " a "[] = {%f, %f, %f}", \
              b->cr, b->cg, b->cb)
 
-    CONSTANT(".u32 depth_src      = %i", (int)s->in_desc ->comp[0].depth);
+    CONSTANT(".u32 depth_src      = %i", (int)s->in_desc->comp[0].depth);
     CONSTANT(".u32 depth_dst      = %i", (int)s->out_desc->comp[0].depth);
     CONSTANT(".u32 fmt_src        = %i", (int)s->in_fmt);
     CONSTANT(".u32 fmt_dst        = %i", (int)s->out_fmt);
@@ -441,9 +453,6 @@ static av_cold int config_props(AVFilterLink *outlink)
     if (ret < 0)
         return ret;
 
-    s->in_desc  = av_pix_fmt_desc_get(s->in_fmt);
-    s->out_desc = av_pix_fmt_desc_get(s->out_fmt);
-
     outlink->sample_aspect_ratio = inlink->sample_aspect_ratio;
 
     return 0;
@@ -524,6 +533,13 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
         goto fail;
     }
 
+    if (!(in->color_trc == AVCOL_TRC_SMPTE2084 ||
+        in->color_trc == AVCOL_TRC_ARIB_STD_B67)) {
+        av_log(ctx, AV_LOG_ERROR, "Unsupported input transfer characteristic\n");
+        ret = AVERROR(EINVAL);
+        goto fail;
+    }
+
     if (!s->cu_func ||
         s->in_range      != in->color_range ||
         s->in_trc        != in->color_trc ||
@@ -536,10 +552,10 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
         s->in_spc        = in->colorspace;
         s->in_chroma_loc = in->chroma_location;
 
-        s->out_range      = AVCOL_RANGE_MPEG;
-        s->out_trc        = AVCOL_TRC_BT709;
-        s->out_pri        = AVCOL_PRI_BT709;
-        s->out_spc        = AVCOL_SPC_BT709;
+        s->out_range      = s->range;
+        s->out_trc        = s->trc;
+        s->out_pri        = s->pri;
+        s->out_spc        = s->spc;
         s->out_chroma_loc = s->in_chroma_loc;
 
         if ((ret = compile(link)) < 0)
@@ -576,11 +592,29 @@ static const AVOption options[] = {
     {     "hable",    0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_HABLE},             0, 0, FLAGS, "tonemap" },
     {     "mobius",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_MOBIUS},            0, 0, FLAGS, "tonemap" },
     {     "bt2390",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_BT2390},            0, 0, FLAGS, "tonemap" },
-    { "format", "Output format",       OFFSET(format_str), AV_OPT_TYPE_STRING, { .str = "same" }, .flags = FLAGS },
-    { "peak",      "signal peak override", OFFSET(peak), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },
-    { "param",     "tonemap parameter",   OFFSET(param), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },
-    { "desat",     "desaturation parameter",   OFFSET(desat_param), AV_OPT_TYPE_DOUBLE, {.dbl = 0.5}, 0, DBL_MAX, FLAGS },
-    { "threshold", "scene detection threshold",   OFFSET(scene_threshold), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0, DBL_MAX, FLAGS },
+    { "transfer",     "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, {.i64 = AVCOL_TRC_BT709}, -1, INT_MAX, FLAGS, "transfer" },
+    { "t",            "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, {.i64 = AVCOL_TRC_BT709}, -1, INT_MAX, FLAGS, "transfer" },
+    {     "bt709",    0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_TRC_BT709},           0, 0, FLAGS, "transfer" },
+    {     "bt2020",   0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_TRC_BT2020_10},       0, 0, FLAGS, "transfer" },
+    { "matrix",       "set colorspace matrix", OFFSET(spc), AV_OPT_TYPE_INT, {.i64 = AVCOL_SPC_BT709}, -1, INT_MAX, FLAGS, "matrix" },
+    { "m",            "set colorspace matrix", OFFSET(spc), AV_OPT_TYPE_INT, {.i64 = AVCOL_SPC_BT709}, -1, INT_MAX, FLAGS, "matrix" },
+    {     "bt709",    0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_SPC_BT709},           0, 0, FLAGS, "matrix" },
+    {     "bt2020",   0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_SPC_BT2020_NCL},      0, 0, FLAGS, "matrix" },
+    { "primaries",    "set color primaries", OFFSET(pri), AV_OPT_TYPE_INT, {.i64 = AVCOL_PRI_BT709}, -1, INT_MAX, FLAGS, "primaries" },
+    { "p",            "set color primaries", OFFSET(pri), AV_OPT_TYPE_INT, {.i64 = AVCOL_PRI_BT709}, -1, INT_MAX, FLAGS, "primaries" },
+    {     "bt709",    0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_PRI_BT709},           0, 0, FLAGS, "primaries" },
+    {     "bt2020",   0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_PRI_BT2020},          0, 0, FLAGS, "primaries" },
+    { "range",        "set color range", OFFSET(range), AV_OPT_TYPE_INT, {.i64 = AVCOL_RANGE_MPEG}, -1, INT_MAX, FLAGS, "range" },
+    { "r",            "set color range", OFFSET(range), AV_OPT_TYPE_INT, {.i64 = AVCOL_RANGE_MPEG}, -1, INT_MAX, FLAGS, "range" },
+    {     "tv",       0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_MPEG},          0, 0, FLAGS, "range" },
+    {     "pc",       0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_JPEG},          0, 0, FLAGS, "range" },
+    {     "limited",  0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_MPEG},          0, 0, FLAGS, "range" },
+    {     "full",     0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_JPEG},          0, 0, FLAGS, "range" },
+    { "format",       "Output format",       OFFSET(format_str), AV_OPT_TYPE_STRING, { .str = "same" }, .flags = FLAGS },
+    { "peak",         "signal peak override", OFFSET(peak), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },
+    { "param",        "tonemap parameter",   OFFSET(param), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },
+    { "desat",        "desaturation parameter",   OFFSET(desat_param), AV_OPT_TYPE_DOUBLE, {.dbl = 0.5}, 0, DBL_MAX, FLAGS },
+    { "threshold",    "scene detection threshold",   OFFSET(scene_threshold), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0, DBL_MAX, FLAGS },
     { NULL },
 };
 
@@ -611,7 +645,7 @@ static const AVFilterPad outputs[] = {
 
 AVFilter ff_vf_tonemap_cuda = {
     .name        = "tonemap_cuda",
-    .description = NULL_IF_CONFIG_SMALL("GPU accelerated HDR-to-SDR tone mapping"),
+    .description = NULL_IF_CONFIG_SMALL("GPU accelerated HDR to SDR tonemapping"),
 
     .init          = init,
     .uninit        = uninit,
