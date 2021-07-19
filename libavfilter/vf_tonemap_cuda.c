@@ -71,10 +71,10 @@ typedef struct TonemapCUDAContext {
 
     enum AVPixelFormat in_fmt, out_fmt;
 
-    enum AVColorRange range, in_range, out_range;
     enum AVColorTransferCharacteristic trc, in_trc, out_trc;
     enum AVColorSpace spc, in_spc, out_spc;
     enum AVColorPrimaries pri, in_pri, out_pri;
+    enum AVColorRange range, in_range, out_range;
     enum AVChromaLocation in_chroma_loc, out_chroma_loc;
 
     AVBufferRef *frames_ctx;
@@ -303,14 +303,20 @@ static av_cold int compile(AVFilterLink *inlink)
     size_t cubin_size;
     double rgb_matrix[3][3], yuv_matrix[3][3], rgb2rgb_matrix[3][3];
     const struct LumaCoefficients *in_coeffs, *out_coeffs;
+    enum AVColorTransferCharacteristic in_trc = s->in_trc, out_trc = s->out_trc;
     enum AVColorSpace in_spc = s->in_spc, out_spc = s->out_spc;
     enum AVColorPrimaries in_pri = s->in_pri, out_pri = s->out_pri;
-    enum AVColorTransferCharacteristic in_trc = s->in_trc, out_trc = s->out_trc;
+    enum AVColorRange in_range = s->in_range, out_range = s->out_range;
     char info_log[4096], error_log[4096];
     CUjit_option options[] = {CU_JIT_INFO_LOG_BUFFER, CU_JIT_ERROR_LOG_BUFFER, CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES};
     void *option_values[]  = {&info_log,              &error_log,              (void*)(intptr_t)sizeof(info_log), (void*)(intptr_t)sizeof(error_log)};
 
     extern char tonemap_ptx[];
+
+    if (in_trc == AVCOL_TRC_UNSPECIFIED)
+        in_trc = AVCOL_TRC_SMPTE2084;
+    if (out_trc == AVCOL_TRC_UNSPECIFIED)
+        out_trc = AVCOL_TRC_BT709;
 
     if (in_spc == AVCOL_SPC_UNSPECIFIED)
         in_spc = AVCOL_SPC_BT2020_NCL;
@@ -322,10 +328,23 @@ static av_cold int compile(AVFilterLink *inlink)
     if (out_pri == AVCOL_PRI_UNSPECIFIED)
         out_pri = AVCOL_PRI_BT709;
 
-    if (in_trc == AVCOL_TRC_UNSPECIFIED)
-        in_trc = AVCOL_TRC_SMPTE2084;
-    if (out_trc == AVCOL_TRC_UNSPECIFIED)
-        out_trc = AVCOL_TRC_BT709;
+    if (in_range == AVCOL_RANGE_UNSPECIFIED)
+        in_range = AVCOL_RANGE_MPEG;
+    if (out_range == AVCOL_RANGE_UNSPECIFIED)
+        out_range = AVCOL_RANGE_MPEG;
+
+    av_log(ctx, AV_LOG_DEBUG, "Tonemapping transfer from %s to %s\n",
+           av_color_transfer_name(in_trc),
+           av_color_transfer_name(out_trc));
+    av_log(ctx, AV_LOG_DEBUG, "Mapping colorspace from %s to %s\n",
+           av_color_space_name(in_spc),
+           av_color_space_name(out_spc));
+    av_log(ctx, AV_LOG_DEBUG, "Mapping primaries from %s to %s\n",
+           av_color_primaries_name(in_pri),
+           av_color_primaries_name(out_pri));
+    av_log(ctx, AV_LOG_DEBUG, "Mapping range from %s to %s\n",
+           av_color_range_name(in_range),
+           av_color_range_name(out_range));
 
     if (!(in_coeffs = ff_get_luma_coefficients(in_spc)))
         return AVERROR(EINVAL);
@@ -363,8 +382,8 @@ static av_cold int compile(AVFilterLink *inlink)
     CONSTANT(".u32 depth_dst      = %i", (int)s->out_desc->comp[0].depth);
     CONSTANT(".u32 fmt_src        = %i", (int)s->in_fmt);
     CONSTANT(".u32 fmt_dst        = %i", (int)s->out_fmt);
-    CONSTANT(".u32 range_src      = %i", (int)s->in_range);
-    CONSTANT(".u32 range_dst      = %i", (int)s->out_range);
+    CONSTANT(".u32 range_src      = %i", (int)in_range);
+    CONSTANT(".u32 range_dst      = %i", (int)out_range);
     CONSTANT(".u32 trc_src        = %i", (int)in_trc);
     CONSTANT(".u32 trc_dst        = %i", (int)out_trc);
     CONSTANT(".u32 chroma_loc_src = %i", (int)s->in_chroma_loc);
@@ -535,27 +554,28 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
 
     if (!(in->color_trc == AVCOL_TRC_SMPTE2084 ||
         in->color_trc == AVCOL_TRC_ARIB_STD_B67)) {
-        av_log(ctx, AV_LOG_ERROR, "Unsupported input transfer characteristic\n");
+        av_log(ctx, AV_LOG_ERROR, "Unsupported input transfer characteristic: %s\n",
+               av_color_transfer_name(in->color_trc));
         ret = AVERROR(EINVAL);
         goto fail;
     }
 
     if (!s->cu_func ||
-        s->in_range      != in->color_range ||
         s->in_trc        != in->color_trc ||
-        s->in_pri        != in->color_primaries ||
         s->in_spc        != in->colorspace ||
+        s->in_pri        != in->color_primaries ||
+        s->in_range      != in->color_range ||
         s->in_chroma_loc != in->chroma_location) {
-        s->in_range      = in->color_range;
         s->in_trc        = in->color_trc;
-        s->in_pri        = in->color_primaries;
         s->in_spc        = in->colorspace;
+        s->in_pri        = in->color_primaries;
+        s->in_range      = in->color_range;
         s->in_chroma_loc = in->chroma_location;
 
-        s->out_range      = s->range;
         s->out_trc        = s->trc;
-        s->out_pri        = s->pri;
         s->out_spc        = s->spc;
+        s->out_pri        = s->pri;
+        s->out_range      = s->range;
         s->out_chroma_loc = s->in_chroma_loc;
 
         if ((ret = compile(link)) < 0)
