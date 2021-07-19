@@ -129,7 +129,7 @@ static int tonemap_opencl_init(AVFilterContext *avctx)
     AVBPrint header;
     const char *opencl_sources[OPENCL_SOURCE_NB];
 
-    av_bprint_init(&header, 1024, AV_BPRINT_SIZE_AUTOMATIC);
+    av_bprint_init(&header, 2048, AV_BPRINT_SIZE_UNLIMITED);
 
     switch(ctx->tonemap) {
     case TONEMAP_GAMMA:
