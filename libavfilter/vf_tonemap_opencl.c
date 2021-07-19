@@ -200,6 +200,14 @@ static int tonemap_opencl_init(AVFilterContext *avctx)
 
     av_bprintf(&header, "#define powr native_powr\n");
 
+    av_bprintf(&header, "#define exp native_exp\n");
+
+    av_bprintf(&header, "#define log native_log\n");
+
+    av_bprintf(&header, "#define log10 native_log10\n");
+
+    av_bprintf(&header, "#define sqrt native_sqrt\n");
+
     if (rgb2rgb_passthrough)
         av_bprintf(&header, "#define RGB2RGB_PASSTHROUGH\n");
     else
