@@ -22,15 +22,23 @@
 #include "util.h"
 #include "libavutil/pixfmt.h"
 
+#define BT709_ALPHA 1.09929682680944f
+#define BT709_BETA  0.018053968510807f
+
 #define ST2084_MAX_LUMINANCE 10000.0f
-#define REFERENCE_WHITE 100.0f
+#define REFERENCE_WHITE      203.0f
 
 #define ST2084_M1 0.1593017578125f
 #define ST2084_M2 78.84375f
 #define ST2084_C1 0.8359375f
 #define ST2084_C2 18.8515625f
 #define ST2084_C3 18.6875f
-#define SDR_AVG   0.25f
+
+#define ARIB_B67_A 0.17883277f
+#define ARIB_B67_B 0.28466892f
+#define ARIB_B67_C 0.55991073f
+
+#define FLOAT_EPS 1.175494351e-38f
 
 extern const float3 luma_src, luma_dst;
 extern const enum AVColorTransferCharacteristic trc_src, trc_dst;
@@ -67,85 +75,87 @@ static __inline__ __device__ float3 get_chroma_sample(float3 a, float3 b, float3
     }
 }
 
+// linearizer for PQ/ST2084
 static __inline__ __device__ float eotf_st2084(float x) {
-    float p = __powf(x, 1.0f / ST2084_M2);
-    float a = max(p -ST2084_C1, 0.0f);
-    float b = max(ST2084_C2 - ST2084_C3 * p, 1e-6f);
-    float c  = __powf(a / b, 1.0f / ST2084_M1);
-    return x > 0.0f ? c * ST2084_MAX_LUMINANCE / REFERENCE_WHITE : 0.0f;
+    if (x > 0.0f) {
+        float xpow = __powf(x, 1.0f / ST2084_M2);
+        float num = max(xpow - ST2084_C1, 0.0f);
+        float den = max(ST2084_C2 - ST2084_C3 * xpow, FLOAT_EPS);
+        x = __powf(num / den, 1.0f / ST2084_M1);
+        return x * ST2084_MAX_LUMINANCE / REFERENCE_WHITE;
+    } else {
+        return 0.0f;
+    }
 }
 
+// delinearizer for PQ/ST2084
 static __inline__ __device__ float inverse_eotf_st2084(float x) {
-    float a = x;
-    x *= REFERENCE_WHITE / ST2084_MAX_LUMINANCE;
-    x = __powf(x, ST2084_M1);
-    x = (ST2084_C1 + ST2084_C2 * x) / (1.0f + ST2084_C3 * x);
-    return a > 0.0f ? __powf(x, ST2084_M2) : 0.0f;
+    if (x > 0.0f) {
+        x *= REFERENCE_WHITE / ST2084_MAX_LUMINANCE;
+        float xpow = __powf(x, ST2084_M1);
+#if 0
+        // Original formulation from SMPTE ST 2084:2014 publication.
+        float num = ST2084_C1 + ST2084_C2 * xpow;
+        float den = 1.0f + ST2084_C3 * xpow;
+        return __powf(num / den, ST2084_M2);
+#else
+        // More stable arrangement that avoids some cancellation error.
+        float num = (ST2084_C1 - 1.0f) + (ST2084_C2 - ST2084_C3) * xpow;
+        float den = 1.0f + ST2084_C3 * xpow;
+        return __powf(1.0f + num / den, ST2084_M2);
+#endif
+    } else {
+        return 0.0f;
+    }
 }
 
-#define HLG_A 0.17883277f
-#define HLG_B 0.28466892f
-#define HLG_C 0.55991073f
-
-// linearizer for HLG
-static __inline__ __device__ float inverse_oetf_hlg(float x) {
-    float a = 4.0f * x * x;
-    float b = __expf((x - HLG_C) / HLG_A) + HLG_B;
-    return x < 0.5f ? a : b;
+static __inline__ __device__ float ootf_1_2(float x) {
+    return x < 0.0f ? x : __powf(x, 1.2f);
 }
 
-// delinearizer for HLG
-static __inline__ __device__ float oetf_hlg(float x) {
-    float a = 0.5f * __sqrtf(x);
-    float b = HLG_A * __logf(x - HLG_B) + HLG_C;
-    return x <= 1.0f ? a : b;
+static __inline__ __device__ float inverse_ootf_1_2(float x) {
+    return x < 0.0f ? x : __powf(x, 1.0f / 1.2f);
 }
 
-static __inline__ __device__ float3 ootf_hlg(float3 c, float peak) {
-    float luma = get_luma_src(c, luma_src);
-    float gamma =  1.2f + 0.42f * __log10f(peak * REFERENCE_WHITE / 1000.0f);
-    gamma = max(1.0f, gamma);
-    float factor = peak * __powf(luma, gamma - 1.0f) / __powf(12.0f, gamma);
-    return c * factor;
+static __inline__ __device__ float oetf_arib_b67(float x) {
+    x = max(x, 0.0f);
+    return x <= (1.0f / 12.0f)
+           ? __sqrtf(3.0f * x)
+           : (ARIB_B67_A * __logf(12.0f * x - ARIB_B67_B) + ARIB_B67_C);
 }
 
-static __inline__ __device__ float3 inverse_ootf_hlg(float3 c, float peak) {
-    float gamma = 1.2f + 0.42f * __log10f(peak * REFERENCE_WHITE / 1000.0f);
-    c = c * __powf(12.0f, gamma) / peak;
-    c = c / __powf(get_luma_dst(c, luma_dst), (gamma - 1.0f) / gamma);
-    return c;
+static __inline__ __device__ float inverse_oetf_arib_b67(float x) {
+    x = max(x, 0.0f);
+    return x <= 0.5f
+           ? (x * x) * (1.0f / 3.0f)
+           : (__expf((x - ARIB_B67_C) / ARIB_B67_A) + ARIB_B67_B) * (1.0f / 12.0f);
 }
 
-static __inline__ __device__ float inverse_eotf_bt1886(float c) {
-    return c < 0.0f ? 0.0f : __powf(c, 1.0f / 2.4f);
+// linearizer for HLG/ARIB-B67
+static __inline__ __device__ float eotf_arib_b67(float x) {
+    return ootf_1_2(inverse_oetf_arib_b67(x));
 }
 
-static __inline__ __device__ float oetf_bt709(float c) {
-    c = c < 0.0f ? 0.0f : c;
-    float r1 = 4.5f * c;
-    float r2 = 1.099f * __powf(c, 0.45f) - 0.099f;
-    return c < 0.018f ? r1 : r2;
-}
-static __inline__ __device__ float inverse_oetf_bt709(float c) {
-    float r1 = c / 4.5f;
-    float r2 = __powf((c + 0.099f) / 1.099f, 1.0f / 0.45f);
-    return c < 0.081f ? r1 : r2;
+// delinearizer for HLG/ARIB-B67
+static __inline__ __device__ float inverse_eotf_arib_b67(float x) {
+    return oetf_arib_b67(inverse_ootf_1_2(x));
 }
 
-static __inline__ __device__ float3 ootf(float3 c, float peak)
-{
-    if (trc_src == AVCOL_TRC_ARIB_STD_B67)
-        return ootf_hlg(c, peak);
-    else
-        return c;
+static __inline__ __device__ float inverse_eotf_bt1886(float x) {
+    return x < 0.0f ? 0.0f : __powf(x, 1.0f / 2.4f);
 }
 
-static __inline__ __device__ float3 inverse_ootf(float3 c, float peak)
-{
-    if (trc_dst == AVCOL_TRC_ARIB_STD_B67)
-        return inverse_ootf_hlg(c, peak);
-    else
-        return c;
+static __inline__ __device__ float oetf_bt709(float x) {
+    x = max(0.0f, x);
+    return x < BT709_BETA
+           ? (x * 4.5f)
+           : (BT709_ALPHA * __powf(x, 0.45f) - (BT709_ALPHA - 1.0f));
+}
+
+static __inline__ __device__ float inverse_oetf_bt709(float x) {
+    return x < (4.5f * BT709_BETA)
+           ? (x / 4.5f)
+           : (__powf((x + (BT709_ALPHA - 1.0f)) / BT709_ALPHA, 1.0f / 0.45f));
 }
 
 static __inline__ __device__ float linearize(float x)
@@ -153,7 +163,7 @@ static __inline__ __device__ float linearize(float x)
     if (trc_src == AVCOL_TRC_SMPTE2084)
         return eotf_st2084(x);
     else if (trc_src == AVCOL_TRC_ARIB_STD_B67)
-        return inverse_oetf_hlg(x);
+        return eotf_arib_b67(x);
     else
         return x;
 }
@@ -228,4 +238,3 @@ static __inline__ __device__ float3 lrgb2lrgb(float3 c) {
 }
 
 #endif /* AVFILTER_CUDA_COLORSPACE_COMMON_H */
-

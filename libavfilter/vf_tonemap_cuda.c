@@ -100,6 +100,7 @@ typedef struct TonemapCUDAContext {
     double param;
     double desat_param;
     double peak;
+    double dst_peak;
     double scene_threshold;
 
     const AVPixFmtDescriptor *in_desc, *out_desc;
@@ -313,6 +314,26 @@ static av_cold int compile(AVFilterLink *inlink)
 
     extern char tonemap_ptx[];
 
+    switch(s->tonemap) {
+    case TONEMAP_GAMMA:
+        if (isnan(s->param))
+            s->param = 1.8f;
+        break;
+    case TONEMAP_REINHARD:
+        if (!isnan(s->param))
+            s->param = (1.0f - s->param) / s->param;
+        break;
+    case TONEMAP_MOBIUS:
+        if (isnan(s->param))
+            s->param = 0.3f;
+        break;
+    }
+
+    if (isnan(s->param))
+        s->param = 1.0f;
+
+    s->dst_peak = 1.0f;
+
     if (in_trc == AVCOL_TRC_UNSPECIFIED)
         in_trc = AVCOL_TRC_SMPTE2084;
     if (out_trc == AVCOL_TRC_UNSPECIFIED)
@@ -494,10 +515,13 @@ static int run_kernel(AVFilterContext *ctx,
     if (ret < 0)
         goto fail;
 
-    if (s->peak > 0)
-        src.peak = s->peak;
+    src.peak = s->peak;
+    if (!src.peak) {
+        src.peak = ff_determine_signal_peak(in);
+        av_log(s, AV_LOG_DEBUG, "Computed signal peak: %f\n", src.peak);
+    }
 
-    dst.peak = 1.;
+    dst.peak = s->dst_peak;
 
     ret = CHECK_CU(cu->cuLaunchKernel(s->cu_func,
                                       DIV_UP(src.width / 2, BLOCKX), DIV_UP(src.height / 2, BLOCKY), 1,
@@ -593,6 +617,9 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
         goto fail;
 
     av_frame_free(&in);
+
+    ff_update_hdr_metadata(out, s->dst_peak);
+
     return ff_filter_frame(outlink, out);
 fail:
     av_frame_free(&in);
@@ -632,7 +659,7 @@ static const AVOption options[] = {
     {     "full",     0, 0, AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_JPEG},          0, 0, FLAGS, "range" },
     { "format",       "Output format",       OFFSET(format_str), AV_OPT_TYPE_STRING, { .str = "same" }, .flags = FLAGS },
     { "peak",         "signal peak override", OFFSET(peak), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },
-    { "param",        "tonemap parameter",   OFFSET(param), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },
+    { "param",        "tonemap parameter",   OFFSET(param), AV_OPT_TYPE_DOUBLE, {.dbl = NAN}, DBL_MIN, DBL_MAX, FLAGS },
     { "desat",        "desaturation parameter",   OFFSET(desat_param), AV_OPT_TYPE_DOUBLE, {.dbl = 0.5}, 0, DBL_MAX, FLAGS },
     { "threshold",    "scene detection threshold",   OFFSET(scene_threshold), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0, DBL_MAX, FLAGS },
     { NULL },

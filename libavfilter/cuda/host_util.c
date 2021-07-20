@@ -30,8 +30,7 @@ int ff_make_cuda_frame(FFCUDAFrame *dst, const AVFrame *src)
     dst->width  = src->width;
     dst->height = src->height;
 
-    dst->peak = ff_determine_signal_peak(src);
-    dst->avg  = 0.f; //FIXME
+    dst->avg  = 1.0f;
 
     return 0;
 }

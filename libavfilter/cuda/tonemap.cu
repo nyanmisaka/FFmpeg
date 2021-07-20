@@ -51,7 +51,7 @@ static __inline__ __device__
 float gamma(float s, float peak) {
     float p = s > 0.05f ? s / peak : 0.05f / peak;
     float v = __powf(p, 1.0f / tone_param);
-    return s > 0.05f ? v : (s * v /0.05f);
+    return s > 0.05f ? v : (s * v / 0.05f);
 }
 
 static __inline__ __device__
@@ -78,7 +78,7 @@ float mobius(float s, float peak) {
         return s;
 
     a = -j * j * (peak - 1.0f) / (j * j - 2.0f * j + peak);
-    b = (j * j - 2.0f * j * peak + peak) / max(peak - 1.0f, 1e-6f);
+    b = (j * j - 2.0f * j * peak + peak) / max(peak - 1.0f, FLOAT_EPS);
 
     return (b * b + 2.0f * b * j + j * j) / (b - a) * (s + a) / (s + b);
 }
@@ -129,7 +129,7 @@ float map(float s, float peak, float dst_peak)
 
 static __inline__ __device__
 float3 map_one_pixel_rgb(float3 rgb, const FFCUDAFrame& src, const FFCUDAFrame& dst) {
-    float sig = max(max(rgb.x, max(rgb.y, rgb.z)), 1e-6f);
+    float sig = max(max(rgb.x, max(rgb.y, rgb.z)), FLOAT_EPS);
     float peak = src.peak;
     float dst_peak = dst.peak;
 
@@ -143,40 +143,28 @@ float3 map_one_pixel_rgb(float3 rgb, const FFCUDAFrame& src, const FFCUDAFrame& 
 
     float sig_old = sig;
 
-    /*
-    // Scale the signal to compensate for differences in the average brightness
-    float slope = min(1.0f, dst.average / src.average);
-    sig *= slope;
-    peak *= slope;
-    */
-
     // Desaturate the color using a coefficient dependent on the signal level
     if (desat_param > 0.0f) {
         float luma = get_luma_dst(rgb, luma_dst);
-        float coeff = max(sig - 0.18f, 1e-6f) / max(sig, 1e-6f);
+        float coeff = max(sig - 0.18f, FLOAT_EPS) / max(sig, FLOAT_EPS);
         coeff = __powf(coeff, 10.0f / desat_param);
         rgb = mix(rgb, make_float3(luma, luma, luma), make_float3(coeff, coeff, coeff));
-        /*
-        sig = mix(sig, luma * slope, coeff);
-        */
     }
 
     sig = map(sig, peak, dst_peak);
 
     sig = min(sig, 1.0f);
-    rgb = rgb * (sig/sig_old);
+    rgb = rgb * (sig / sig_old);
     return rgb;
 }
 
-// map from source space YUV to destination space RGB
+// Map from source space YUV to destination space RGB
 static __inline__ __device__
 float3 map_to_dst_space_from_yuv(float3 yuv, float peak) {
     float3 c = yuv2lrgb(yuv);
-    c = ootf(c, peak);
     c = lrgb2lrgb(c);
     return c;
 }
-
 
 extern "C" {
 
@@ -205,11 +193,6 @@ __global__ void tonemap(FFCUDAFrame src, FFCUDAFrame dst)
         c2 = map_one_pixel_rgb(c2, src, dst);
         c3 = map_one_pixel_rgb(c3, src, dst);
 
-        c0 = inverse_ootf(c0, dst.peak);
-        c1 = inverse_ootf(c1, dst.peak);
-        c2 = inverse_ootf(c2, dst.peak);
-        c3 = inverse_ootf(c3, dst.peak);
-
         yuv0 = lrgb2yuv(c0);
         yuv1 = lrgb2yuv(c1);
         yuv2 = lrgb2yuv(c2);
@@ -220,4 +203,3 @@ __global__ void tonemap(FFCUDAFrame src, FFCUDAFrame dst)
 }
 
 }
-
