@@ -429,6 +429,7 @@ extern AVFilter ff_vf_tmedian;
 extern AVFilter ff_vf_tmidequalizer;
 extern AVFilter ff_vf_tmix;
 extern AVFilter ff_vf_tonemap;
+extern AVFilter ff_vf_tonemapx;
 extern AVFilter ff_vf_tonemap_cuda;
 extern AVFilter ff_vf_tonemap_opencl;
 extern AVFilter ff_vf_tonemap_vaapi;
