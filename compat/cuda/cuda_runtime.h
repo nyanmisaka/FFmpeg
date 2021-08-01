@@ -33,55 +33,69 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define abs(x) ((x) < 0 ? -(x) : (x))
+#define clamp(a, b, c) min(max((a), (b)), (c))
 
 #define atomicAdd(a, b) (__atomic_fetch_add(a, b, __ATOMIC_SEQ_CST))
 
 // Basic typedefs
 typedef __device_builtin__ unsigned long long cudaTextureObject_t;
 
-typedef struct __device_builtin__ __align__(2) uchar2
-{
-    unsigned char x, y;
-} uchar2;
+#define MAKE_VECTORS(type, base) \
+typedef struct __device_builtin__ type##1 { \
+    base x; \
+} type##1; \
+static __inline__ __device__ type##1 make_##type##1(base x) { \
+    type##1 ret; \
+    ret.x = x; \
+    return ret; \
+} \
+typedef struct __device_builtin__ __align__(sizeof(base) * 2) type##2 { \
+    base x, y; \
+} type##2; \
+static __inline__ __device__ type##2 make_##type##2(base x, base y) { \
+    type##2 ret; \
+    ret.x = x; \
+    ret.y = y; \
+    return ret; \
+} \
+typedef struct __device_builtin__ type##3 { \
+    base x, y, z; \
+} type##3; \
+static __inline__ __device__ type##3 make_##type##3(base x, base y, base z) { \
+    type##3 ret; \
+    ret.x = x; \
+    ret.y = y; \
+    ret.z = z; \
+    return ret; \
+} \
+typedef struct __device_builtin__ __align__(sizeof(base) * 4) type##4 { \
+    base x, y, z, w; \
+} type##4; \
+static __inline__ __device__ type##4 make_##type##4(base x, base y, base z, base w) { \
+    type##4 ret; \
+    ret.x = x; \
+    ret.y = y; \
+    ret.z = z; \
+    ret.w = w; \
+    return ret; \
+}
 
-typedef struct __device_builtin__ __align__(4) ushort2
-{
-    unsigned short x, y;
-} ushort2;
+#define MAKE_TYPE
 
-typedef struct __device_builtin__ uint3
-{
-    unsigned int x, y, z;
-} uint3;
+MAKE_VECTORS(uchar, unsigned char)
+MAKE_VECTORS(ushort, unsigned short)
+MAKE_VECTORS(int, int)
+MAKE_VECTORS(uint, unsigned int)
+MAKE_VECTORS(float, float)
 
-typedef struct uint3 dim3;
-
-typedef struct __device_builtin__ __align__(8) int2
-{
-    int x, y;
-} int2;
-
-typedef struct __device_builtin__ __align__(4) uchar4
-{
-    unsigned char x, y, z, w;
-} uchar4;
-
-typedef struct __device_builtin__ __align__(8) ushort4
-{
-    unsigned short x, y, z, w;
-} ushort4;
-
-typedef struct __device_builtin__ __align__(16) int4
-{
-    int x, y, z, w;
-} int4;
+typedef struct __device_builtin__ uint3 dim3;
 
 // Accessors for special registers
 #define GETCOMP(reg, comp) \
     asm("mov.u32 %0, %%" #reg "." #comp ";" : "=r"(tmp)); \
     ret.comp = tmp;
 
-#define GET(name, reg) static inline __device__ uint3 name() {\
+#define GET(name, reg) static __inline__ __device__ uint3 name() {\
     uint3 ret; \
     unsigned tmp; \
     GETCOMP(reg, x) \
@@ -99,14 +113,8 @@ GET(getThreadIdx, tid)
 #define blockDim (getBlockDim())
 #define threadIdx (getThreadIdx())
 
-// Basic initializers (simple macros rather than inline functions)
-#define make_uchar2(a, b) ((uchar2){.x = a, .y = b})
-#define make_ushort2(a, b) ((ushort2){.x = a, .y = b})
-#define make_uchar4(a, b, c, d) ((uchar4){.x = a, .y = b, .z = c, .w = d})
-#define make_ushort4(a, b, c, d) ((ushort4){.x = a, .y = b, .z = c, .w = d})
-
 // Conversions from the tex instruction's 4-register output to various types
-#define TEX2D(type, ret) static inline __device__ void conv(type* out, unsigned a, unsigned b, unsigned c, unsigned d) {*out = (ret);}
+#define TEX2D(type, ret) static __inline__ __device__ void conv(type* out, unsigned a, unsigned b, unsigned c, unsigned d) {*out = (ret);}
 
 TEX2D(unsigned char, a & 0xFF)
 TEX2D(unsigned short, a & 0xFFFF)
@@ -117,15 +125,47 @@ TEX2D(ushort4, make_ushort4((unsigned short)a, (unsigned short)b, (unsigned shor
 
 // Template calling tex instruction and converting the output to the selected type
 template <class T>
-static inline __device__ T tex2D(cudaTextureObject_t texObject, float x, float y)
+static __inline__ __device__ T tex2D(cudaTextureObject_t texObject, float x, float y)
 {
-  T ret;
-  unsigned ret1, ret2, ret3, ret4;
-  asm("tex.2d.v4.u32.f32 {%0, %1, %2, %3}, [%4, {%5, %6}];" :
-      "=r"(ret1), "=r"(ret2), "=r"(ret3), "=r"(ret4) :
-      "l"(texObject), "f"(x), "f"(y));
-  conv(&ret, ret1, ret2, ret3, ret4);
-  return ret;
+    T ret;
+    unsigned ret1, ret2, ret3, ret4;
+    asm("tex.2d.v4.u32.f32 {%0, %1, %2, %3}, [%4, {%5, %6}];" :
+        "=r"(ret1), "=r"(ret2), "=r"(ret3), "=r"(ret4) :
+        "l"(texObject), "f"(x), "f"(y));
+    conv(&ret, ret1, ret2, ret3, ret4);
+    return ret;
 }
 
-#endif /* COMPAT_CUDA_CUDA_RUNTIME_H */
+static __inline__ __device__ float __exp2f(float x)
+{
+    float ret;
+    asm("ex2.approx.f32 %0, %1;" : "=f"(ret) : "f"(x));
+    return ret;
+}
+
+#define __expf(x) (__exp2f((x) * 1.4427f))
+
+static __inline__ __device__ float __log2f(float x)
+{
+    float ret;
+    asm("lg2.approx.f32 %0, %1;" : "=f"(ret) : "f"(x));
+    return ret;
+}
+
+#define __logf(x) (__log2f((x)) * 0.693147f)
+#define __log10f(x) (__log2f((x)) * 0.30103f)
+
+static __inline__ __device__ float __powf(float x, float y)
+{
+    return __exp2f(y * __log2f(x));
+}
+
+static __inline__ __device__ float __sqrtf(float x)
+{
+    float ret;
+    asm("sqrtf.approx.f32 %0, %1;" : "=f"(ret) : "f"(x));
+    return ret;
+}
+
+#endif
+
