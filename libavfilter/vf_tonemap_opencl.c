@@ -111,6 +111,8 @@ static void get_rgb2rgb_matrix(enum AVColorPrimaries in, enum AVColorPrimaries o
 static int tonemap_opencl_init(AVFilterContext *avctx)
 {
     TonemapOpenCLContext *ctx = avctx->priv;
+    AVHWFramesContext *in_frames_ctx =
+        (AVHWFramesContext*)avctx->inputs[0]->hw_frames_ctx->data;
     int rgb2rgb_passthrough = 1;
     double rgb2rgb[3][3], rgb2yuv[3][3], yuv2rgb[3][3];
     const struct LumaCoefficients *luma_src, *luma_dst;
@@ -174,7 +176,21 @@ static int tonemap_opencl_init(AVFilterContext *avctx)
                ctx->target_peak);
     av_bprintf(&header, "__constant const float scene_threshold = %.4ff;\n",
                ctx->scene_threshold);
+
     av_bprintf(&header, "#define TONE_FUNC %s\n", tonemap_func[ctx->tonemap]);
+
+    if (in_frames_ctx->sw_format == AV_PIX_FMT_YUV420P16)
+        av_bprintf(&header, "#define NON_SEMI_PLANAR_IN\n");
+
+    if (ctx->format == AV_PIX_FMT_YUV420P ||
+        ctx->format == AV_PIX_FMT_YUV420P16)
+        av_bprintf(&header, "#define NON_SEMI_PLANAR_OUT\n");
+
+    av_bprintf(&header, "#define powr native_powr\n");
+    av_bprintf(&header, "#define exp native_exp\n");
+    av_bprintf(&header, "#define log native_log\n");
+    av_bprintf(&header, "#define log10 native_log10\n");
+    av_bprintf(&header, "#define sqrt native_sqrt\n");
 
     if (ctx->primaries_out != ctx->primaries_in) {
         get_rgb2rgb_matrix(ctx->primaries_in, ctx->primaries_out, rgb2rgb);
@@ -188,21 +204,10 @@ static int tonemap_opencl_init(AVFilterContext *avctx)
 
     av_bprintf(&header, "#define chroma_loc %d\n", (int)ctx->chroma_loc);
 
-    av_bprintf(&header, "#define powr native_powr\n");
-
-    av_bprintf(&header, "#define exp native_exp\n");
-
-    av_bprintf(&header, "#define log native_log\n");
-
-    av_bprintf(&header, "#define log10 native_log10\n");
-
-    av_bprintf(&header, "#define sqrt native_sqrt\n");
-
     if (rgb2rgb_passthrough)
         av_bprintf(&header, "#define RGB2RGB_PASSTHROUGH\n");
     else
         ff_opencl_print_const_matrix_3x3(&header, "rgb2rgb", rgb2rgb);
-
 
     luma_src = ff_get_luma_coefficients(ctx->colorspace_in);
     if (!luma_src) {
@@ -276,10 +281,13 @@ static int tonemap_opencl_config_output(AVFilterLink *outlink)
     if (s->format == AV_PIX_FMT_NONE)
         av_log(avctx, AV_LOG_WARNING, "Format not set, use default format NV12\n");
     else {
-      if (s->format != AV_PIX_FMT_P010 &&
-          s->format != AV_PIX_FMT_NV12) {
+      if (!(s->format == AV_PIX_FMT_YUV420P ||
+            s->format == AV_PIX_FMT_YUV420P16 ||
+            s->format == AV_PIX_FMT_NV12 ||
+            s->format == AV_PIX_FMT_P010 ||
+            s->format == AV_PIX_FMT_P016)) {
         av_log(avctx, AV_LOG_ERROR, "Unsupported output format,"
-               "only p010/nv12 supported now\n");
+               "only nv12|p010|p016|yuv420p|yuv420p16 are supported\n");
         return AVERROR(EINVAL);
       }
     }
@@ -295,16 +303,28 @@ static int tonemap_opencl_config_output(AVFilterLink *outlink)
 static int launch_kernel(AVFilterContext *avctx, cl_kernel kernel,
                          AVFrame *output, AVFrame *input, float peak) {
     TonemapOpenCLContext *ctx = avctx->priv;
+    AVHWFramesContext *in_frames_ctx =
+        (AVHWFramesContext*)avctx->inputs[0]->hw_frames_ctx->data;
     int err = AVERROR(ENOSYS);
     size_t global_work[2];
     size_t local_work[2];
     cl_int cle;
+    int idx_arg;
 
     CL_SET_KERNEL_ARG(kernel, 0, cl_mem, &output->data[0]);
     CL_SET_KERNEL_ARG(kernel, 1, cl_mem, &input->data[0]);
     CL_SET_KERNEL_ARG(kernel, 2, cl_mem, &output->data[1]);
     CL_SET_KERNEL_ARG(kernel, 3, cl_mem, &input->data[1]);
-    CL_SET_KERNEL_ARG(kernel, 4, cl_float, &peak);
+
+    idx_arg = 4;
+    if (ctx->format == AV_PIX_FMT_YUV420P ||
+        ctx->format == AV_PIX_FMT_YUV420P16) {
+        CL_SET_KERNEL_ARG(kernel, idx_arg++, cl_mem, &output->data[2]);
+    }
+    if (in_frames_ctx->sw_format == AV_PIX_FMT_YUV420P16) {
+        CL_SET_KERNEL_ARG(kernel, idx_arg++, cl_mem, &input->data[2]);
+    }
+    CL_SET_KERNEL_ARG(kernel, idx_arg, cl_float, &peak);
 
     local_work[0]  = 16;
     local_work[1]  = 16;
@@ -384,7 +404,9 @@ static int tonemap_opencl_filter_frame(AVFilterLink *inlink, AVFrame *input)
             goto fail;
         }
 
-        if (input_frames_ctx->sw_format != AV_PIX_FMT_P010) {
+        if (!(input_frames_ctx->sw_format == AV_PIX_FMT_P010 ||
+            input_frames_ctx->sw_format == AV_PIX_FMT_P016 ||
+            input_frames_ctx->sw_format == AV_PIX_FMT_YUV420P16)) {
             av_log(ctx, AV_LOG_ERROR, "Unsupported input format: %s\n",
                    av_get_pix_fmt_name(input_frames_ctx->sw_format));
             err = AVERROR(ENOSYS);
@@ -398,6 +420,8 @@ static int tonemap_opencl_filter_frame(AVFilterLink *inlink, AVFrame *input)
 
     switch(input_frames_ctx->sw_format) {
     case AV_PIX_FMT_P010:
+    case AV_PIX_FMT_P016:
+    case AV_PIX_FMT_YUV420P16:
         err = launch_kernel(avctx, ctx->kernel, output, input, peak);
         if (err < 0) goto fail;
         break;
@@ -451,38 +475,38 @@ static av_cold void tonemap_opencl_uninit(AVFilterContext *avctx)
 #define OFFSET(x) offsetof(TonemapOpenCLContext, x)
 #define FLAGS (AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
 static const AVOption tonemap_opencl_options[] = {
-    { "tonemap",      "tonemap algorithm selection", OFFSET(tonemap), AV_OPT_TYPE_INT, {.i64 = TONEMAP_NONE}, TONEMAP_NONE, TONEMAP_MAX - 1, FLAGS, "tonemap" },
-    {     "none",     0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_NONE},              0, 0, FLAGS, "tonemap" },
-    {     "linear",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_LINEAR},            0, 0, FLAGS, "tonemap" },
-    {     "gamma",    0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_GAMMA},             0, 0, FLAGS, "tonemap" },
-    {     "clip",     0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_CLIP},              0, 0, FLAGS, "tonemap" },
-    {     "reinhard", 0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_REINHARD},          0, 0, FLAGS, "tonemap" },
-    {     "hable",    0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_HABLE},             0, 0, FLAGS, "tonemap" },
-    {     "mobius",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_MOBIUS},            0, 0, FLAGS, "tonemap" },
-    {     "bt2390",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_BT2390},            0, 0, FLAGS, "tonemap" },
-    { "transfer", "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, {.i64 = AVCOL_TRC_BT709}, -1, INT_MAX, FLAGS, "transfer" },
-    { "t",        "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, {.i64 = AVCOL_TRC_BT709}, -1, INT_MAX, FLAGS, "transfer" },
-    {     "bt709",            0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_TRC_BT709},         0, 0, FLAGS, "transfer" },
-    {     "bt2020",           0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_TRC_BT2020_10},     0, 0, FLAGS, "transfer" },
-    { "matrix", "set colorspace matrix", OFFSET(colorspace), AV_OPT_TYPE_INT, {.i64 = -1}, -1, INT_MAX, FLAGS, "matrix" },
-    { "m",      "set colorspace matrix", OFFSET(colorspace), AV_OPT_TYPE_INT, {.i64 = -1}, -1, INT_MAX, FLAGS, "matrix" },
-    {     "bt709",            0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_SPC_BT709},         0, 0, FLAGS, "matrix" },
-    {     "bt2020",           0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_SPC_BT2020_NCL},    0, 0, FLAGS, "matrix" },
-    { "primaries", "set color primaries", OFFSET(primaries), AV_OPT_TYPE_INT, {.i64 = -1}, -1, INT_MAX, FLAGS, "primaries" },
-    { "p",         "set color primaries", OFFSET(primaries), AV_OPT_TYPE_INT, {.i64 = -1}, -1, INT_MAX, FLAGS, "primaries" },
-    {     "bt709",            0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_PRI_BT709},         0, 0, FLAGS, "primaries" },
-    {     "bt2020",           0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_PRI_BT2020},        0, 0, FLAGS, "primaries" },
-    { "range",         "set color range", OFFSET(range), AV_OPT_TYPE_INT, {.i64 = -1}, -1, INT_MAX, FLAGS, "range" },
-    { "r",             "set color range", OFFSET(range), AV_OPT_TYPE_INT, {.i64 = -1}, -1, INT_MAX, FLAGS, "range" },
-    {     "tv",            0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_MPEG},         0, 0, FLAGS, "range" },
-    {     "pc",            0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_JPEG},         0, 0, FLAGS, "range" },
-    {     "limited",       0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_MPEG},         0, 0, FLAGS, "range" },
-    {     "full",          0,       0,                 AV_OPT_TYPE_CONST, {.i64 = AVCOL_RANGE_JPEG},         0, 0, FLAGS, "range" },
-    { "format",    "output pixel format", OFFSET(format), AV_OPT_TYPE_PIXEL_FMT, {.i64 = AV_PIX_FMT_NONE}, AV_PIX_FMT_NONE, INT_MAX, FLAGS, "fmt" },
-    { "peak",      "signal peak override", OFFSET(peak), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },
-    { "param",     "tonemap parameter",   OFFSET(param), AV_OPT_TYPE_DOUBLE, {.dbl = NAN}, DBL_MIN, DBL_MAX, FLAGS },
-    { "desat",     "desaturation parameter",   OFFSET(desat_param), AV_OPT_TYPE_DOUBLE, {.dbl = 0.5}, 0, DBL_MAX, FLAGS },
-    { "threshold", "scene detection threshold",   OFFSET(scene_threshold), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0, DBL_MAX, FLAGS },
+    { "tonemap",      "tonemap algorithm selection", OFFSET(tonemap), AV_OPT_TYPE_INT, { .i64 = TONEMAP_NONE }, TONEMAP_NONE, TONEMAP_MAX - 1, FLAGS, "tonemap" },
+        { "none",     0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_NONE },              0, 0, FLAGS, "tonemap" },
+        { "linear",   0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_LINEAR },            0, 0, FLAGS, "tonemap" },
+        { "gamma",    0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_GAMMA },             0, 0, FLAGS, "tonemap" },
+        { "clip",     0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_CLIP },              0, 0, FLAGS, "tonemap" },
+        { "reinhard", 0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_REINHARD },          0, 0, FLAGS, "tonemap" },
+        { "hable",    0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_HABLE },             0, 0, FLAGS, "tonemap" },
+        { "mobius",   0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_MOBIUS },            0, 0, FLAGS, "tonemap" },
+        { "bt2390",   0, 0, AV_OPT_TYPE_CONST, { .i64 = TONEMAP_BT2390 },            0, 0, FLAGS, "tonemap" },
+    { "transfer", "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, { .i64 = AVCOL_TRC_BT709 }, -1, INT_MAX, FLAGS, "transfer" },
+    { "t",        "set transfer characteristic", OFFSET(trc), AV_OPT_TYPE_INT, { .i64 = AVCOL_TRC_BT709 }, -1, INT_MAX, FLAGS, "transfer" },
+        { "bt709",            0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_TRC_BT709 },         0, 0, FLAGS, "transfer" },
+        { "bt2020",           0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_TRC_BT2020_10 },     0, 0, FLAGS, "transfer" },
+    { "matrix", "set colorspace matrix", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_BT709 }, -1, INT_MAX, FLAGS, "matrix" },
+    { "m",      "set colorspace matrix", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_BT709 }, -1, INT_MAX, FLAGS, "matrix" },
+        { "bt709",            0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_SPC_BT709 },         0, 0, FLAGS, "matrix" },
+        { "bt2020",           0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_SPC_BT2020_NCL },    0, 0, FLAGS, "matrix" },
+    { "primaries", "set color primaries", OFFSET(primaries), AV_OPT_TYPE_INT, { .i64 = AVCOL_PRI_BT709 }, -1, INT_MAX, FLAGS, "primaries" },
+    { "p",         "set color primaries", OFFSET(primaries), AV_OPT_TYPE_INT, { .i64 = AVCOL_PRI_BT709 }, -1, INT_MAX, FLAGS, "primaries" },
+        { "bt709",            0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_PRI_BT709 },         0, 0, FLAGS, "primaries" },
+        { "bt2020",           0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_PRI_BT2020 },        0, 0, FLAGS, "primaries" },
+    { "range",         "set color range", OFFSET(range), AV_OPT_TYPE_INT, { .i64 = AVCOL_RANGE_MPEG }, -1, INT_MAX, FLAGS, "range" },
+    { "r",             "set color range", OFFSET(range), AV_OPT_TYPE_INT, { .i64 = AVCOL_RANGE_MPEG }, -1, INT_MAX, FLAGS, "range" },
+        { "tv",            0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG },         0, 0, FLAGS, "range" },
+        { "pc",            0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG },         0, 0, FLAGS, "range" },
+        { "limited",       0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG },         0, 0, FLAGS, "range" },
+        { "full",          0,       0,                 AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG },         0, 0, FLAGS, "range" },
+    { "format",    "output pixel format", OFFSET(format), AV_OPT_TYPE_PIXEL_FMT, { .i64 = AV_PIX_FMT_NONE }, AV_PIX_FMT_NONE, INT_MAX, FLAGS, "fmt" },
+    { "peak",      "signal peak override", OFFSET(peak), AV_OPT_TYPE_DOUBLE, { .dbl = 0 }, 0, DBL_MAX, FLAGS },
+    { "param",     "tonemap parameter",   OFFSET(param), AV_OPT_TYPE_DOUBLE, { .dbl = NAN }, DBL_MIN, DBL_MAX, FLAGS },
+    { "desat",     "desaturation parameter",   OFFSET(desat_param), AV_OPT_TYPE_DOUBLE, { .dbl = 0.5}, 0, DBL_MAX, FLAGS },
+    { "threshold", "scene detection threshold",   OFFSET(scene_threshold), AV_OPT_TYPE_DOUBLE, { .dbl = 0.2 }, 0, DBL_MAX, FLAGS },
     { NULL }
 };
 

@@ -130,10 +130,15 @@ __kernel void tonemap(__write_only image2d_t dst1,
                       __read_only  image2d_t src1,
                       __write_only image2d_t dst2,
                       __read_only  image2d_t src2,
+#ifdef NON_SEMI_PLANAR_OUT
+                      __write_only image2d_t dst3,
+#endif
+#ifdef NON_SEMI_PLANAR_IN
+                      __read_only  image2d_t src3,
+#endif
                       float peak
                       )
 {
-    __local uint sum_wg;
     const sampler_t sampler = (CLK_NORMALIZED_COORDS_FALSE |
                                CLK_ADDRESS_CLAMP_TO_EDGE   |
                                CLK_FILTER_NEAREST);
@@ -143,43 +148,53 @@ __kernel void tonemap(__write_only image2d_t dst1,
     int x = 2 * xi;
     int y = 2 * yi;
 
-    float y0 = read_imagef(src1, sampler, (int2)(x,     y)).x;
-    float y1 = read_imagef(src1, sampler, (int2)(x + 1, y)).x;
-    float y2 = read_imagef(src1, sampler, (int2)(x,     y + 1)).x;
-    float y3 = read_imagef(src1, sampler, (int2)(x + 1, y + 1)).x;
-    float2 uv = read_imagef(src2, sampler, (int2)(xi,     yi)).xy;
-
-    float3 c0 = map_to_dst_space_from_yuv((float3)(y0, uv.x, uv.y), peak);
-    float3 c1 = map_to_dst_space_from_yuv((float3)(y1, uv.x, uv.y), peak);
-    float3 c2 = map_to_dst_space_from_yuv((float3)(y2, uv.x, uv.y), peak);
-    float3 c3 = map_to_dst_space_from_yuv((float3)(y3, uv.x, uv.y), peak);
-
-    float sig0 = max(c0.x, max(c0.y, c0.z));
-    float sig1 = max(c1.x, max(c1.y, c1.z));
-    float sig2 = max(c2.x, max(c2.y, c2.z));
-    float sig3 = max(c3.x, max(c3.y, c3.z));
-    float sig = max(sig0, max(sig1, max(sig2, sig3)));
-
-    float3 c0_old = c0, c1_old = c1, c2_old = c2;
-    c0 = map_one_pixel_rgb(c0, peak);
-    c1 = map_one_pixel_rgb(c1, peak);
-    c2 = map_one_pixel_rgb(c2, peak);
-    c3 = map_one_pixel_rgb(c3, peak);
-
-    y0 = lrgb2y(c0);
-    y1 = lrgb2y(c1);
-    y2 = lrgb2y(c2);
-    y3 = lrgb2y(c3);
-
-    float3 chroma_c = get_chroma_sample(c0, c1, c2, c3);
-    float3 chroma = lrgb2yuv(chroma_c);
-
     if (xi < get_image_width(dst2) && yi < get_image_height(dst2)) {
-        write_imagef(dst1, (int2)(x, y), (float4)(y0, 0.0f, 0.0f, 1.0f));
-        write_imagef(dst1, (int2)(x+1, y), (float4)(y1, 0.0f, 0.0f, 1.0f));
-        write_imagef(dst1, (int2)(x, y+1), (float4)(y2, 0.0f, 0.0f, 1.0f));
-        write_imagef(dst1, (int2)(x+1, y+1), (float4)(y3, 0.0f, 0.0f, 1.0f));
-        write_imagef(dst2, (int2)(xi, yi),
-                     (float4)(chroma.y, chroma.z, 0.0f, 1.0f));
+        float y0 = read_imagef(src1, sampler, (int2)(x,     y)).x;
+        float y1 = read_imagef(src1, sampler, (int2)(x + 1, y)).x;
+        float y2 = read_imagef(src1, sampler, (int2)(x,     y + 1)).x;
+        float y3 = read_imagef(src1, sampler, (int2)(x + 1, y + 1)).x;
+#ifdef NON_SEMI_PLANAR_IN
+        float u = read_imagef(src2, sampler, (int2)(xi, yi)).x;
+        float v = read_imagef(src3, sampler, (int2)(xi, yi)).x;
+        float2 uv = (float2)(u, v);
+#else
+        float2 uv = read_imagef(src2, sampler, (int2)(xi, yi)).xy;
+#endif
+
+        float3 c0 = map_to_dst_space_from_yuv((float3)(y0, uv.x, uv.y), peak);
+        float3 c1 = map_to_dst_space_from_yuv((float3)(y1, uv.x, uv.y), peak);
+        float3 c2 = map_to_dst_space_from_yuv((float3)(y2, uv.x, uv.y), peak);
+        float3 c3 = map_to_dst_space_from_yuv((float3)(y3, uv.x, uv.y), peak);
+
+        float sig0 = max(c0.x, max(c0.y, c0.z));
+        float sig1 = max(c1.x, max(c1.y, c1.z));
+        float sig2 = max(c2.x, max(c2.y, c2.z));
+        float sig3 = max(c3.x, max(c3.y, c3.z));
+        float sig = max(sig0, max(sig1, max(sig2, sig3)));
+
+        float3 c0_old = c0, c1_old = c1, c2_old = c2;
+        c0 = map_one_pixel_rgb(c0, peak);
+        c1 = map_one_pixel_rgb(c1, peak);
+        c2 = map_one_pixel_rgb(c2, peak);
+        c3 = map_one_pixel_rgb(c3, peak);
+
+        y0 = lrgb2y(c0);
+        y1 = lrgb2y(c1);
+        y2 = lrgb2y(c2);
+        y3 = lrgb2y(c3);
+
+        float3 chroma_c = get_chroma_sample(c0, c1, c2, c3);
+        float3 chroma = lrgb2yuv(chroma_c);
+
+        write_imagef(dst1, (int2)(x,     y), (float4)(y0, 0.0f, 0.0f, 1.0f));
+        write_imagef(dst1, (int2)(x + 1, y), (float4)(y1, 0.0f, 0.0f, 1.0f));
+        write_imagef(dst1, (int2)(x,     y + 1), (float4)(y2, 0.0f, 0.0f, 1.0f));
+        write_imagef(dst1, (int2)(x + 1, y + 1), (float4)(y3, 0.0f, 0.0f, 1.0f));
+#ifdef NON_SEMI_PLANAR_OUT
+        write_imagef(dst2, (int2)(xi, yi), (float4)(chroma.y, 0.0f, 0.0f, 1.0f));
+        write_imagef(dst3, (int2)(xi, yi), (float4)(chroma.z, 0.0f, 0.0f, 1.0f));
+#else
+        write_imagef(dst2, (int2)(xi, yi), (float4)(chroma.y, chroma.z, 0.0f, 1.0f));
+#endif
     }
 }
