@@ -198,7 +198,7 @@ static AVBufferRef *d3d11va_alloc_single(AVHWFramesContext *ctx)
         .ArraySize  = 1,
         .Usage      = D3D11_USAGE_DEFAULT,
         .BindFlags  = hwctx->BindFlags,
-        .MiscFlags  = hwctx->MiscFlags,
+        .MiscFlags  = hwctx->MiscFlags | D3D11_RESOURCE_MISC_SHARED,
     };
 
     hr = ID3D11Device_CreateTexture2D(device_hwctx->device, &texDesc, NULL, &tex);
@@ -262,7 +262,7 @@ static int d3d11va_frames_init(AVHWFramesContext *ctx)
         .ArraySize  = ctx->initial_pool_size,
         .Usage      = D3D11_USAGE_DEFAULT,
         .BindFlags  = hwctx->BindFlags,
-        .MiscFlags  = hwctx->MiscFlags,
+        .MiscFlags  = hwctx->MiscFlags | D3D11_RESOURCE_MISC_SHARED,
     };
 
     if (ctx->user_opaque) {
