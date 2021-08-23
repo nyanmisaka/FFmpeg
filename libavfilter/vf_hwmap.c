@@ -22,6 +22,10 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 
+#if CONFIG_D3D11VA
+#include "libavutil/hwcontext_d3d11va.h"
+#endif
+
 #include "avfilter.h"
 #include "formats.h"
 #include "internal.h"
@@ -146,6 +150,12 @@ static int hwmap_config_output(AVFilterLink *outlink)
 
             if (avctx->extra_hw_frames >= 0)
                 frames->initial_pool_size = 2 + avctx->extra_hw_frames;
+
+#if CONFIG_D3D11VA
+            D3D11_TEXTURE2D_DESC texDesc = { .BindFlags = D3D11_BIND_DECODER, };
+            if (frames->format == AV_PIX_FMT_D3D11)
+                frames->user_opaque = &texDesc;
+#endif
 
             err = av_hwframe_ctx_init(ctx->hwframes_ref);
             if (err < 0) {

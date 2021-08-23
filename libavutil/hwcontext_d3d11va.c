@@ -265,6 +265,12 @@ static int d3d11va_frames_init(AVHWFramesContext *ctx)
         .MiscFlags  = hwctx->MiscFlags,
     };
 
+    if (ctx->user_opaque) {
+        D3D11_TEXTURE2D_DESC *desc = ctx->user_opaque;
+        if (desc->BindFlags & D3D11_BIND_DECODER)
+            texDesc.BindFlags = D3D11_BIND_DECODER;
+    }
+
     if (hwctx->texture) {
         D3D11_TEXTURE2D_DESC texDesc2;
         ID3D11Texture2D_GetDesc(hwctx->texture, &texDesc2);
