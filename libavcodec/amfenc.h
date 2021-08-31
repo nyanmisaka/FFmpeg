@@ -34,7 +34,6 @@ typedef struct AMFEncContext {
     void               *avclass;
     void               *amfctx;
 
-    AMFCompute                            *compute;
     // encoder
     AMFComponent                          *encoder; ///< AMF encoder object
     amf_bool                               eof;     ///< flag indicating EOF happened

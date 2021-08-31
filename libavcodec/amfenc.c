@@ -36,8 +36,6 @@ static int amf_init_context(AVCodecContext *avctx)
     AMF_RESULT  res;
     int ret;
 
-    av_log(avctx, AV_LOG_VERBOSE, "0: amf_init_context\n\n");
-
     ctx->dts_delay = 0;
     ctx->hwsurfaces_in_queue = 0;
     ctx->hwsurfaces_in_queue_max = 16;
@@ -83,9 +81,6 @@ static int amf_init_context(AVCodecContext *avctx)
             res = amf_context_derive_dx11(amfctx, frames_ctx->device_ctx->hwctx);
             if (res != AMF_OK)
                 return res;
-            res = amf_context_init_opencl(amfctx);
-            if (res != AMF_OK)
-                return res;
             break;
 #endif
 #if CONFIG_DXVA2
@@ -115,9 +110,6 @@ static int amf_init_context(AVCodecContext *avctx)
 #if CONFIG_D3D11VA
         case AV_HWDEVICE_TYPE_D3D11VA:
             res = amf_context_derive_dx11(amfctx, device_ctx->hwctx);
-            if (res != AMF_OK)
-                return res;
-            res = amf_context_init_opencl(amfctx);
             if (res != AMF_OK)
                 return res;
             break;
@@ -153,7 +145,6 @@ static int amf_init_context(AVCodecContext *avctx)
         }
     }
 
-    av_log(avctx, AV_LOG_VERBOSE, "1: amf_init_context\n\n");
     return 0;
 }
 
@@ -189,8 +180,6 @@ static int amf_init_encoder(AVCodecContext *avctx)
     const wchar_t     *codec_id = NULL;
     enum AVPixelFormat pix_fmt;
     AMF_RESULT         res;
-
-    av_log(avctx, AV_LOG_VERBOSE, "0: amf_init_encoder\n\n");
 
     switch (avctx->codec->id) {
         case AV_CODEC_ID_H264:
@@ -232,9 +221,6 @@ static int amf_init_encoder(AVCodecContext *avctx)
     pix_fmt = avctx->hw_frames_ctx ? ((AVHWFramesContext*)avctx->hw_frames_ctx->data)->sw_format
                                    : avctx->pix_fmt;
 
-    // enforce output format to NV12
-    //pix_fmt = AV_PIX_FMT_NV12;
-
     ctx->format = amf_av_to_amf_format(pix_fmt);
     AMF_RETURN_IF_FALSE(avctx, ctx->format != AMF_SURFACE_UNKNOWN,
         AVERROR(EINVAL), "Format %s is not supported\n", av_get_pix_fmt_name(pix_fmt));
@@ -261,11 +247,6 @@ static int amf_init_encoder(AVCodecContext *avctx)
     AMF_RETURN_IF_FALSE(avctx, res == AMF_OK,
         AVERROR_ENCODER_NOT_FOUND, "CreateComponent(%ls) failed with error %d\n", codec_id, res);
 
-    res = amfctx->context->pVtbl->GetCompute(amfctx->context, AMF_MEMORY_OPENCL, &ctx->compute);
-    AMF_RETURN_IF_FALSE(avctx, res == AMF_OK,
-        AVERROR_ENCODER_NOT_FOUND, "GetCompute(AMF_MEMORY_OPENCL) failed with error %d\n", res);
-
-    av_log(avctx, AV_LOG_VERBOSE, "1: amf_init_encoder\n\n");
     return 0;
 }
 
@@ -284,9 +265,6 @@ av_cold int ff_amf_encode_close(AVCodecContext *avctx)
         ctx->encoder->pVtbl->Release(ctx->encoder);
         ctx->encoder = NULL;
     }
-
-    if (ctx->compute)
-        ctx->compute->pVtbl->Release(ctx->compute);
 
     amf_unload_library(amfctx);
     av_freep(&amfctx);
@@ -537,101 +515,6 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
                 res = amfctx->context->pVtbl->CreateSurfaceFromDX11Native(amfctx->context, texture, &surface, NULL); // wrap to AMF surface
                 AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX11Native() failed with error %d\n", res);
 
-/*
-                // ******************************************
-                // setcrop on src
-                res = surface_in->pVtbl->SetCrop(surface_in, 0, 0, frame->width, frame->height);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "in: SetCrop(%dx%d) failed with error %d\n", frame->width, frame->height, res);
-
-                // src: P010 surface (DX11 interop to OpenCL)
-                res = surface_in->pVtbl->Convert(surface_in, AMF_MEMORY_OPENCL);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "in: Convert(AMF_MEMORY_OPENCL) failed with error %d\n", res);
-
-                // dst: NV12 surface (allocate in DX11 and interop to OpenCL for compute process)
-                //surf_fmt_in = surface_in->pVtbl->GetFormat(surface_in);
-                surf_fmt_in = AMF_SURFACE_NV12;
-                res = amfctx->context->pVtbl->AllocSurface(amfctx->context, AMF_MEMORY_DX11, surf_fmt_in, frame->width, frame->height, &surface);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: AllocSurface(AMF_MEMORY_DX11) failed with error %d\n", res);
-
-                // setcrop on dst
-                res = surface->pVtbl->SetCrop(surface, 0, 0, frame->width, frame->height);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: SetCrop(%dx%d) failed with error %d\n", frame->width, frame->height, res);
-
-                res = surface->pVtbl->Convert(surface, AMF_MEMORY_OPENCL);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: Convert(AMF_MEMORY_OPENCL) failed with error %d\n", res);
-
-                // src&dst data ptr
-                AMFPlane *srcY = surface_in->pVtbl->GetPlane(surface_in, AMF_PLANE_Y);
-                AMFPlane *srcUV = surface_in->pVtbl->GetPlane(surface_in, AMF_PLANE_UV);
-
-                AMFPlane *dstY = surface->pVtbl->GetPlane(surface, AMF_PLANE_Y);
-                AMFPlane *dstUV = surface->pVtbl->GetPlane(surface, AMF_PLANE_UV);
-
-
-                amf_size origin[3] = { 0, 0, 0 };
-				amf_size regionY[3] = { frame->width, frame->height, 1 };
-                amf_size regionUV[3] = { frame->width >> 1, frame->height >> 1, 1 };
-
-                res = ctx->compute->pVtbl->CopyPlane(ctx->compute, srcY, origin, regionY, dstY, origin);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: CopyPlane(Y) failed with error %d\n", res);
-
-                res = ctx->compute->pVtbl->CopyPlane(ctx->compute, srcUV, origin, regionUV, dstUV, origin);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: CopyPlane(UV) failed with error %d\n", res);
-
-
-                cl_image_format fmt1 = { 0, 0 };
-                cl_image_format fmt2 = { 0, 0 };
-                cl_image_format fmt3 = { 0, 0 };
-                cl_image_format fmt4 = { 0, 0 };
-                cl_image_format fmt5 = { 0, 0 };
-                cl_image_format fmt6 = { 0, 0 };
-                cl_int cle;
-
-                cle = clGetImageInfo((cl_mem)srcY->pVtbl->GetNative(srcY), CL_IMAGE_FORMAT, sizeof(cl_image_format), &fmt1, 0);
-                if (!cle)
-                    av_log(avctx, AV_LOG_VERBOSE, "[srcY] order: %d, data_type: %d\n", fmt1.image_channel_order, fmt1.image_channel_data_type);
-
-                cle = clGetImageInfo((cl_mem)srcUV->pVtbl->GetNative(srcUV), CL_IMAGE_FORMAT, sizeof(cl_image_format), &fmt2, 0);
-                if (!cle)
-                    av_log(avctx, AV_LOG_VERBOSE, "[srcUV] order: %d, data_type: %d\n", fmt2.image_channel_order, fmt2.image_channel_data_type);
-
-                cle = clGetImageInfo((cl_mem)dstY->pVtbl->GetNative(dstY), CL_IMAGE_FORMAT, sizeof(cl_image_format), &fmt3, 0);
-                if (!cle)
-                    av_log(avctx, AV_LOG_VERBOSE, "[dstY] order: %d, data_type: %d\n", fmt3.image_channel_order, fmt3.image_channel_data_type);
-
-                cle = clGetImageInfo((cl_mem)dstUV->pVtbl->GetNative(dstUV), CL_IMAGE_FORMAT, sizeof(cl_image_format), &fmt4, 0);
-                if (!cle)
-                    av_log(avctx, AV_LOG_VERBOSE, "[dstUV] order: %d, data_type: %d\n", fmt4.image_channel_order, fmt4.image_channel_data_type);
-
-
-                // P010(uint16)-->NV12(uint8) conversion via AMFCompute
-                res = ctx->compute->pVtbl->ConvertPlaneToPlane(ctx->compute, srcY, &dstY, AMF_CHANNEL_ORDER_R, AMF_CHANNEL_UNSIGNED_INT8);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: ConvertPlaneToPlane(Y@uint8) failed with error %d\n", res);
-                av_log(avctx, AV_LOG_VERBOSE, "resY: %d\n", res);
-
-                res = ctx->compute->pVtbl->ConvertPlaneToPlane(ctx->compute, srcUV, &dstUV, AMF_CHANNEL_ORDER_RG, AMF_CHANNEL_UNSIGNED_INT8);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: ConvertPlaneToPlane(UV@uint8) failed with error %d\n", res);
-                av_log(avctx, AV_LOG_VERBOSE, "resUV: %d\n", res);
-
-                cle = clGetImageInfo((cl_mem)dstY->pVtbl->GetNative(dstY), CL_IMAGE_FORMAT, sizeof(cl_image_format), &fmt5, 0);
-                if (!cle)
-                    av_log(avctx, AV_LOG_VERBOSE, "[dstY] order: %d, data_type: %d\n", fmt5.image_channel_order, fmt5.image_channel_data_type);
-
-                cle = clGetImageInfo((cl_mem)dstUV->pVtbl->GetNative(dstUV), CL_IMAGE_FORMAT, sizeof(cl_image_format), &fmt6, 0);
-                if (!cle)
-                    av_log(avctx, AV_LOG_VERBOSE, "[dstUV] order: %d, data_type: %d\n", fmt6.image_channel_order, fmt6.image_channel_data_type);
-
-                // FinishQueue
-                res = ctx->compute->pVtbl->FinishQueue(ctx->compute);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "FinishQueue() failed with error %d\n", res);
-
-                // re-interop dst surface from OpenCL to DX11 for encoding process
-                res = surface->pVtbl->Convert(surface, AMF_MEMORY_DX11);
-                AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "out: Convert(AMF_MEMORY_DX11) failed with error %d\n", res);
-
-                surface_in->pVtbl->Release(surface_in);
-                // ******************************************
-*/
                 hw_surface = 1;
             }
             break;

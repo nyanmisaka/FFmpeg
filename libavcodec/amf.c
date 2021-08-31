@@ -138,8 +138,6 @@ int amf_load_library(AVAMFContext *ctx)
     AMFQueryVersion_Fn version_fun;
     AMF_RESULT         res;
 
-    av_log(NULL, AV_LOG_VERBOSE, "0: amf_load_library\n\n");
-
     ctx->library = dlopen(AMF_DLL_NAMEA, RTLD_NOW | RTLD_LOCAL);
     AMF_RETURN_IF_FALSE(ctx->avclass, ctx->library != NULL,
         AVERROR_UNKNOWN, "DLL %s failed to open\n", AMF_DLL_NAMEA);
@@ -168,16 +166,12 @@ int amf_load_library(AVAMFContext *ctx)
     AMF_RETURN_IF_FALSE(ctx->avclass, res == AMF_OK,
         AVERROR_UNKNOWN, "GetDebug() failed with error %d\n", res);
 
-    av_log(NULL, AV_LOG_VERBOSE, "1: amf_load_library\n\n");
-
     return 0;
 }
 
 int amf_create_context(AVAMFContext *ctx)
 {
     AMF_RESULT res;
-
-    av_log(NULL, AV_LOG_VERBOSE, "0: amf_create_context\n\n");
 
     // configure AMF logger
     ctx->trace->pVtbl->EnableWriter(ctx->trace, AMF_TRACE_WRITER_DEBUG_OUTPUT, !!ctx->log_to_dbg);
@@ -195,8 +189,6 @@ int amf_create_context(AVAMFContext *ctx)
     res = ctx->factory->pVtbl->CreateContext(ctx->factory, &ctx->context);
     AMF_RETURN_IF_FALSE(ctx->avclass, res == AMF_OK,
         AVERROR_UNKNOWN, "CreateContext() failed with error %d\n", res);
-
-    av_log(NULL, AV_LOG_VERBOSE, "1: amf_create_context\n\n");
 
     return 0;
 }
