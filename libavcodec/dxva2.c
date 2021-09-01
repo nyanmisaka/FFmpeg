@@ -611,7 +611,7 @@ int ff_dxva2_common_frame_params(AVCodecContext *avctx,
     /* the HEVC DXVA2 spec asks for 128 pixel aligned surfaces to ensure
     all coding features have enough room to work with */
     else if (avctx->codec_id == AV_CODEC_ID_HEVC || avctx->codec_id == AV_CODEC_ID_AV1)
-        surface_alignment = 128;
+        surface_alignment = 8;
     else
         surface_alignment = 16;
 
