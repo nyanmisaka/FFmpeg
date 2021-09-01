@@ -28,6 +28,15 @@ extern float  eotf_st2084(float);
 extern float  inverse_eotf_st2084(float);
 extern float3 get_chroma_sample(float3, float3, float3, float3);
 
+#ifdef ENABLE_DITHER
+float3 get_dithered_rgb(float3 rgb, float d) {
+    float r = floor(rgb.x * dither_quantization + d + 0.5f / dither_size2) * native_recip(dither_quantization);
+    float g = floor(rgb.y * dither_quantization + d + 0.5f / dither_size2) * native_recip(dither_quantization);
+    float b = floor(rgb.z * dither_quantization + d + 0.5f / dither_size2) * native_recip(dither_quantization);
+    return (float3)(r, g, b);
+}
+#endif
+
 float hable_f(float in) {
     float a = 0.15f, b = 0.50f, c = 0.10f, d = 0.20f, e = 0.02f, f = 0.30f;
     return (in * (in * a + b * c) + d * e) / (in * (in * a + b) + d * f) - e / f;
@@ -126,6 +135,14 @@ float3 map_to_dst_space_from_yuv(float3 yuv, float peak) {
     return c;
 }
 
+__constant sampler_t sampler   = (CLK_NORMALIZED_COORDS_FALSE |
+                                  CLK_ADDRESS_CLAMP_TO_EDGE   |
+                                  CLK_FILTER_NEAREST);
+
+__constant sampler_t d_sampler = (CLK_NORMALIZED_COORDS_TRUE |
+                                  CLK_ADDRESS_REPEAT         |
+                                  CLK_FILTER_NEAREST);
+
 __kernel void tonemap(__write_only image2d_t dst1,
                       __read_only  image2d_t src1,
                       __write_only image2d_t dst2,
@@ -136,17 +153,22 @@ __kernel void tonemap(__write_only image2d_t dst1,
 #ifdef NON_SEMI_PLANAR_IN
                       __read_only  image2d_t src3,
 #endif
+#ifdef ENABLE_DITHER
+                      __read_only  image2d_t dither,
+#endif
                       float peak
                       )
 {
-    const sampler_t sampler = (CLK_NORMALIZED_COORDS_FALSE |
-                               CLK_ADDRESS_CLAMP_TO_EDGE   |
-                               CLK_FILTER_NEAREST);
     int xi = get_global_id(0);
     int yi = get_global_id(1);
     // each work item process four pixels
     int x = 2 * xi;
     int y = 2 * yi;
+
+#ifdef ENABLE_DITHER
+    float2 ncoords = convert_float2((int2)(xi, yi)) *
+        (float2)(native_recip(get_image_width(dither)), native_recip(get_image_height(dither)));
+#endif
 
     if (xi < get_image_width(dst2) && yi < get_image_height(dst2)) {
         float y0 = read_imagef(src1, sampler, (int2)(x,     y)).x;
@@ -172,11 +194,18 @@ __kernel void tonemap(__write_only image2d_t dst1,
         float sig3 = max(c3.x, max(c3.y, c3.z));
         float sig = max(sig0, max(sig1, max(sig2, sig3)));
 
-        float3 c0_old = c0, c1_old = c1, c2_old = c2;
         c0 = map_one_pixel_rgb(c0, peak);
         c1 = map_one_pixel_rgb(c1, peak);
         c2 = map_one_pixel_rgb(c2, peak);
         c3 = map_one_pixel_rgb(c3, peak);
+
+#ifdef ENABLE_DITHER
+        float d = read_imagef(dither, d_sampler, ncoords).x;
+        c0 = get_dithered_rgb(c0, d);
+        c1 = get_dithered_rgb(c1, d);
+        c2 = get_dithered_rgb(c2, d);
+        c3 = get_dithered_rgb(c3, d);
+#endif
 
         y0 = lrgb2y(c0);
         y1 = lrgb2y(c1);
