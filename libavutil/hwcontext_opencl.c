@@ -74,6 +74,10 @@ typedef CL_API_ENTRY cl_mem(CL_API_CALL *clConvertImageAMD_fn)(
     cl_context context, cl_mem image, const cl_image_format *image_format,
     cl_int *errcode_ret);
 
+typedef CL_API_ENTRY cl_mem(CL_API_CALL *clCreateBufferFromImageAMD_fn)(
+    cl_context context, cl_mem image,
+    cl_int *errcode_ret);
+
 #endif
 
 #if HAVE_OPENCL_DRM_ARM
@@ -81,7 +85,6 @@ typedef CL_API_ENTRY cl_mem(CL_API_CALL *clConvertImageAMD_fn)(
 #include <drm_fourcc.h>
 #include "hwcontext_drm.h"
 #endif
-
 
 typedef struct OpenCLDeviceContext {
     // Default command queue to use for transfer/mapping operations on
@@ -136,6 +139,8 @@ typedef struct OpenCLDeviceContext {
         clGetPlaneFromImageAMD;
     clConvertImageAMD_fn
         clConvertImageAMD;
+    clCreateBufferFromImageAMD_fn
+        clCreateBufferFromImageAMD;
 #endif
 
 #if HAVE_OPENCL_DRM_ARM
@@ -158,7 +163,6 @@ typedef struct OpenCLFramesContext {
     AVOpenCLFrameDescriptor *mapped_frames;
 #endif
 } OpenCLFramesContext;
-
 
 static void CL_CALLBACK opencl_error_callback(const char *errinfo,
                                               const void *private_info,
@@ -867,9 +871,11 @@ static int opencl_device_init(AVHWDeviceContext *hwdev)
 
         if (priv->d3d11_map_amd) {
             CL_FUNC(clGetPlaneFromImageAMD,
-                    "D3D11 to OpenCL planar mapping on AMD");
+                    "D3D11 to OpenCL image planar mapping on AMD");
             CL_FUNC(clConvertImageAMD,
-                    "D3D11 to OpenCL data converting on AMD");
+                    "D3D11 to OpenCL image data type converting on AMD");
+            CL_FUNC(clCreateBufferFromImageAMD,
+                    "D3D11 to OpenCL buffer from image creating on AMD");
         }
 
         if (fail) {
@@ -1987,7 +1993,6 @@ static int opencl_map_frame(AVHWFramesContext *hwfc, AVFrame *dst,
     OpenCLMapping *map;
     size_t origin[3] = { 0, 0, 0 };
     size_t region[3];
-    size_t row_pitch;
     cl_event events[AV_NUM_DATA_POINTERS];
     int err, p;
 
@@ -2011,6 +2016,8 @@ static int opencl_map_frame(AVHWFramesContext *hwfc, AVFrame *dst,
         return AVERROR(ENOMEM);
 
     for (p = 0;; p++) {
+        size_t row_pitch;
+
         err = opencl_get_plane_format(hwfc->sw_format, p,
                                       src->width, src->height,
                                       &image_format, &image_desc);
@@ -2709,9 +2716,10 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
                         image_fmt.image_channel_data_type = CL_UNORM_INT16; break;
                     }
 
-                    desc->planes[p] = device_priv->clConvertImageAMD(
+                    //desc->planes[p]
+                    cl_mem plane = device_priv->clConvertImageAMD(
                         dst_dev->context, planeUI, &image_fmt, &cle);
-                    if (!desc->planes[p]) {
+                    if (!plane) {
                         av_log(dst_fc, AV_LOG_ERROR, "Failed to convert data type of CL image "
                                "from plane %d of image created from D3D11 texture index %d "
                                "to CL_UNORM_INT8|16 type: %d.\n", p, i, cle);
@@ -2720,6 +2728,77 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
                         err = AVERROR(EIO);
                         goto fail;
                     }
+
+                    // create buffer from image
+                    cl_mem plane_buffer = device_priv->clCreateBufferFromImageAMD(
+                        dst_dev->context, plane, &cle);
+                    if (!plane_buffer) {
+                        av_log(dst_fc, AV_LOG_ERROR, "Failed to create buffer from CL image "
+                               "from plane %d of image created from D3D11 "
+                               "texture index %d: %d.\n", p, i, cle);
+                        clReleaseMemObject(plane);
+                        clReleaseMemObject(planeUI);
+                        clReleaseMemObject(image);
+                        err = AVERROR(EIO);
+                        goto fail;
+                    }
+
+                    cl_image_desc image_desc;
+                    err = opencl_get_plane_format(src_fc->sw_format, p,
+                                                  src_fc->width, src_fc->height,
+                                                  &image_fmt, &image_desc);
+                    if (err < 0) {
+                        av_log(dst_fc, AV_LOG_ERROR, "Invalid plane %d: %d.\n", p, err);
+                        clReleaseMemObject(plane_buffer);
+                        clReleaseMemObject(plane);
+                        clReleaseMemObject(planeUI);
+                        clReleaseMemObject(image);
+                        goto fail;
+                    }
+
+                    cl_buffer_region region = {
+                        .origin = 0,
+                        .size = image_desc.image_row_pitch * image_desc.image_height,
+                    };
+
+                    // create sub-buffer from buffer for cropping
+                    cl_mem plane_subbuffer =
+                        clCreateSubBuffer(plane_buffer,
+                                          cl_flags,
+                                          CL_BUFFER_CREATE_TYPE_REGION,
+                                          &region, &cle);
+                    if (!plane_subbuffer) {
+                        av_log(dst_fc, AV_LOG_ERROR, "Failed to create sub-buffer "
+                               "for plane %d: %d.\n", p, cle);
+                        clReleaseMemObject(plane_buffer);
+                        clReleaseMemObject(plane);
+                        clReleaseMemObject(planeUI);
+                        clReleaseMemObject(image);
+                        err = AVERROR(EIO);
+                        goto fail;
+                    }
+
+                    image_desc.buffer = plane_subbuffer;
+
+                    // create image from sub-buffer
+                    desc->planes[p] =
+                        clCreateImage(dst_dev->context, cl_flags,
+                                      &image_fmt, &image_desc, NULL, &cle);
+                    if (!desc->planes[p]) {
+                        av_log(dst_fc, AV_LOG_ERROR, "Failed to create image "
+                               "for plane %d: %d.\n", p, cle);
+                        clReleaseMemObject(plane_subbuffer);
+                        clReleaseMemObject(plane_buffer);
+                        clReleaseMemObject(plane);
+                        clReleaseMemObject(planeUI);
+                        clReleaseMemObject(image);
+                        err = AVERROR(EIO);
+                        goto fail;
+                    }
+
+                    clReleaseMemObject(plane_subbuffer);
+                    clReleaseMemObject(plane_buffer);
+                    clReleaseMemObject(plane);
                 } else {
                     av_log(dst_fc, AV_LOG_ERROR, "The data type of CL image "
                            "from plane %d of image created from D3D11 texture index %d "
