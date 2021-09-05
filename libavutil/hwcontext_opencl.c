@@ -2628,6 +2628,7 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
     OpenCLFramesContext  *frames_priv = dst_fc->internal->priv;
     cl_mem_flags cl_flags;
     cl_int cle;
+    int src_width, src_height;
     int err, i, p, nb_planes;
 
     av_log(dst_fc, AV_LOG_VERBOSE, "libavutil,src_fc: %dx%d", src_fc->width, src_fc->height);
@@ -2646,6 +2647,14 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
         av_assert0(0);
     }
     nb_planes = device_priv->d3d11_map_amd ? 3 : 2;
+
+    if (src_fc->unaligned_width && src_fc->unaligned_height) {
+        src_width  = src_fc->unaligned_width;
+        src_height = src_fc->unaligned_height;
+    } else {
+        src_width  = src_fc->width;
+        src_height = src_fc->height;
+    }
 
     if (src_fc->initial_pool_size == 0) {
         av_log(dst_fc, AV_LOG_ERROR, "Only fixed-size pools are supported "
@@ -2747,7 +2756,7 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
 
                     cl_image_desc image_desc;
                     err = opencl_get_plane_format(src_fc->sw_format, p,
-                                                  src_fc->width, src_fc->height,
+                                                  src_width, src_height,
                                                   &image_fmt, &image_desc);
                     if (err < 0) {
                         av_log(dst_fc, AV_LOG_ERROR, "Invalid plane %d: %d.\n", p, err);

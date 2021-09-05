@@ -630,6 +630,8 @@ int ff_dxva2_common_frame_params(AVCodecContext *avctx,
                             AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
     frames_ctx->width = FFALIGN(avctx->coded_width, surface_alignment);
     frames_ctx->height = FFALIGN(avctx->coded_height, surface_alignment);
+    frames_ctx->unaligned_width = avctx->coded_width;
+    frames_ctx->unaligned_height = avctx->coded_height;
     frames_ctx->initial_pool_size = num_surfaces;
 
 

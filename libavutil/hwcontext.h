@@ -227,6 +227,13 @@ typedef struct AVHWFramesContext {
      * Must be set by the user before calling av_hwframe_ctx_init().
      */
     int width, height;
+
+    /**
+     * The unaligned dimensions of the frames in this pool.
+     *
+     * Must be set by the user before calling av_hwframe_ctx_init().
+     */
+    int unaligned_width, unaligned_height;
 } AVHWFramesContext;
 
 /**
