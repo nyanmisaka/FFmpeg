@@ -2665,6 +2665,7 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
         av_log(dst_fc, AV_LOG_ERROR, "Failed to query pitch alignment: %d.\n", cle);
         return AVERROR(EINVAL);
     }
+    av_log(dst_fc, AV_LOG_VERBOSE, "pitch_alignment_hw: %d\n", pitch_align);
 
     if (src_fc->initial_pool_size == 0) {
         av_log(dst_fc, AV_LOG_ERROR, "Only fixed-size pools are supported "
