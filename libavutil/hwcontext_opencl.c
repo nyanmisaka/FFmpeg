@@ -2658,6 +2658,14 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
         src_height = src_fc->height;
     }
 
+    cl_uint pitch_align;
+    cle = clGetDeviceInfo(dst_dev->device_id, CL_DEVICE_IMAGE_PITCH_ALIGNMENT,
+                          sizeof(pitch_align), &pitch_align, NULL);
+    if (!pitch_align) {
+        av_log(dst_fc, AV_LOG_ERROR, "Failed to query pitch alignment: %d.\n", cle);
+        return AVERROR(EINVAL);
+    }
+
     if (src_fc->initial_pool_size == 0) {
         av_log(dst_fc, AV_LOG_ERROR, "Only fixed-size pools are supported "
                "for D3D11 to OpenCL mapping.\n");
@@ -2785,7 +2793,7 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
                         //    image_desc.image_width, image_desc.image_height, image_desc.image_row_pitch);
                         cl_buffer_region region = {
                             .origin = 0,
-                            .size   = image_desc.image_row_pitch * image_desc.image_height,
+                            .size   = FFALIGN(image_desc.image_row_pitch, pitch_align) * image_desc.image_height,
                         };
 
                         // create sub-buffer from buffer for cropping
