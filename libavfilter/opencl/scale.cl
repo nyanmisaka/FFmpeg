@@ -193,7 +193,7 @@ __kernel void scale(__write_only image2d_t dst1,
     y = get_dithered(y, d);
 #endif
 
-    write_imagef(dst1, dst_pos, (float4)(y, 0.0f, 0.0f, 1.0f));
+//    write_imagef(dst1, dst_pos, (float4)(y, 0.0f, 0.0f, 1.0f));
 }
 
 __kernel void scale_uv(__write_only image2d_t dst2,

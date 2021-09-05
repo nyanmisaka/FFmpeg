@@ -2629,9 +2629,9 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
     cl_mem_flags cl_flags;
     cl_int cle;
     int src_width, src_height;
-    int err, i, p, nb_planes;
+    int err, i, p, nb_planes, unaligned;
 
-    av_log(dst_fc, AV_LOG_VERBOSE, "libavutil,src_fc: %dx%d", src_fc->width, src_fc->height);
+    //av_log(dst_fc, AV_LOG_VERBOSE, "libavutil,src_fc: %dx%d\n", src_fc->width, src_fc->height);
 
     // both AMD and Intel supports NV12 and P010,
     // but Intel requires D3D11_RESOURCE_MISC_SHARED.
@@ -2649,9 +2649,11 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
     nb_planes = device_priv->d3d11_map_amd ? 3 : 2;
 
     if (src_fc->unaligned_width && src_fc->unaligned_height) {
+        unaligned  = 1;
         src_width  = src_fc->unaligned_width;
         src_height = src_fc->unaligned_height;
     } else {
+        unaligned  = 0;
         src_width  = src_fc->width;
         src_height = src_fc->height;
     }
@@ -2705,6 +2707,16 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
                     goto fail;
                 }
 
+                size_t rp, w, h;
+                cle = clGetImageInfo(
+                    planeUI, CL_IMAGE_ROW_PITCH, sizeof(rp), &rp, NULL);
+                cle = clGetImageInfo(
+                    planeUI, CL_IMAGE_WIDTH, sizeof(w), &w, NULL);
+                cle = clGetImageInfo(
+                    planeUI, CL_IMAGE_HEIGHT, sizeof(h), &h, NULL);
+                if (!cle)
+                    av_log(dst_fc, AV_LOG_ERROR, "[plane%d] rp:w:h=%d:%d:%d\n", p, rp, w, h);
+
                 cle = clGetImageInfo(
                     planeUI, CL_IMAGE_FORMAT, sizeof(cl_image_format), &image_fmt, NULL);
                 if (cle != CL_SUCCESS) {
@@ -2740,76 +2752,83 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
                         goto fail;
                     }
 
-                    // create buffer from image
-                    cl_mem plane_buffer = device_priv->clCreateBufferFromImageAMD(
-                        dst_dev->context, plane, &cle);
-                    if (!plane_buffer) {
-                        av_log(dst_fc, AV_LOG_ERROR, "Failed to create buffer from CL image "
-                               "from plane %d of image created from D3D11 "
-                               "texture index %d: %d.\n", p, i, cle);
-                        clReleaseMemObject(plane);
-                        clReleaseMemObject(planeUI);
-                        clReleaseMemObject(image);
-                        err = AVERROR(EIO);
-                        goto fail;
-                    }
+                    if (unaligned) {
+                        // create buffer from image
+                        cl_mem plane_buffer = device_priv->clCreateBufferFromImageAMD(
+                            dst_dev->context, plane, &cle);
+                        if (!plane_buffer) {
+                            av_log(dst_fc, AV_LOG_ERROR, "Failed to create buffer from CL image "
+                                   "from plane %d of image created from D3D11 "
+                                   "texture index %d: %d.\n", p, i, cle);
+                            clReleaseMemObject(plane);
+                            clReleaseMemObject(planeUI);
+                            clReleaseMemObject(image);
+                            err = AVERROR(EIO);
+                            goto fail;
+                        }
 
-                    cl_image_desc image_desc;
-                    err = opencl_get_plane_format(src_fc->sw_format, p,
-                                                  src_width, src_height,
-                                                  &image_fmt, &image_desc);
-                    if (err < 0) {
-                        av_log(dst_fc, AV_LOG_ERROR, "Invalid plane %d: %d.\n", p, err);
-                        clReleaseMemObject(plane_buffer);
-                        clReleaseMemObject(plane);
-                        clReleaseMemObject(planeUI);
-                        clReleaseMemObject(image);
-                        goto fail;
-                    }
+                        cl_image_desc image_desc;
+                        //av_log(dst_fc, AV_LOG_VERBOSE, "fmt:p=%d:%d\n", src_fc->sw_format, p);
+                        err = opencl_get_plane_format(src_fc->sw_format, p,
+                                                      src_width, src_height,
+                                                      &image_fmt, &image_desc);
+                        if (err < 0) {
+                            av_log(dst_fc, AV_LOG_ERROR, "Invalid plane %d: %d.\n", p, err);
+                            clReleaseMemObject(plane_buffer);
+                            clReleaseMemObject(plane);
+                            clReleaseMemObject(planeUI);
+                            clReleaseMemObject(image);
+                            goto fail;
+                        }
 
-                    cl_buffer_region region = {
-                        .origin = 0,
-                        .size = image_desc.image_row_pitch * image_desc.image_height,
-                    };
+                        //av_log(dst_fc, AV_LOG_VERBOSE, "w:h:rp=%d:%d:%d\n",
+                        //    image_desc.image_width, image_desc.image_height, image_desc.image_row_pitch);
+                        cl_buffer_region region = {
+                            .origin = 0,
+                            .size   = image_desc.image_row_pitch * image_desc.image_height,
+                        };
 
-                    // create sub-buffer from buffer for cropping
-                    cl_mem plane_subbuffer =
-                        clCreateSubBuffer(plane_buffer,
-                                          cl_flags,
-                                          CL_BUFFER_CREATE_TYPE_REGION,
-                                          &region, &cle);
-                    if (!plane_subbuffer) {
-                        av_log(dst_fc, AV_LOG_ERROR, "Failed to create sub-buffer "
-                               "for plane %d: %d.\n", p, cle);
-                        clReleaseMemObject(plane_buffer);
-                        clReleaseMemObject(plane);
-                        clReleaseMemObject(planeUI);
-                        clReleaseMemObject(image);
-                        err = AVERROR(EIO);
-                        goto fail;
-                    }
+                        // create sub-buffer from buffer for cropping
+                        cl_mem plane_subbuffer =
+                            clCreateSubBuffer(plane_buffer,
+                                              cl_flags,
+                                              CL_BUFFER_CREATE_TYPE_REGION,
+                                              &region, &cle);
+                        if (!plane_subbuffer) {
+                            av_log(dst_fc, AV_LOG_ERROR, "Failed to create sub-buffer "
+                                   "for plane %d: %d.\n", p, cle);
+                            clReleaseMemObject(plane_buffer);
+                            clReleaseMemObject(plane);
+                            clReleaseMemObject(planeUI);
+                            clReleaseMemObject(image);
+                            err = AVERROR(EIO);
+                            goto fail;
+                        }
 
-                    image_desc.buffer = plane_subbuffer;
+                        image_desc.buffer = plane_subbuffer;
 
-                    // create image from sub-buffer
-                    desc->planes[p] =
-                        clCreateImage(dst_dev->context, cl_flags,
-                                      &image_fmt, &image_desc, NULL, &cle);
-                    if (!desc->planes[p]) {
-                        av_log(dst_fc, AV_LOG_ERROR, "Failed to create image "
-                               "for plane %d: %d.\n", p, cle);
+                        // create image from sub-buffer
+                        desc->planes[p] =
+                            clCreateImage(dst_dev->context, cl_flags,
+                                          &image_fmt, &image_desc, NULL, &cle);
+                        if (!desc->planes[p]) {
+                            av_log(dst_fc, AV_LOG_ERROR, "Failed to create image "
+                                   "for plane %d: %d.\n", p, cle);
+                            clReleaseMemObject(plane_subbuffer);
+                            clReleaseMemObject(plane_buffer);
+                            clReleaseMemObject(plane);
+                            clReleaseMemObject(planeUI);
+                            clReleaseMemObject(image);
+                            err = AVERROR(EIO);
+                            goto fail;
+                        }
+
                         clReleaseMemObject(plane_subbuffer);
                         clReleaseMemObject(plane_buffer);
                         clReleaseMemObject(plane);
-                        clReleaseMemObject(planeUI);
-                        clReleaseMemObject(image);
-                        err = AVERROR(EIO);
-                        goto fail;
+                    } else {
+                        desc->planes[p] = plane;
                     }
-
-                    clReleaseMemObject(plane_subbuffer);
-                    clReleaseMemObject(plane_buffer);
-                    clReleaseMemObject(plane);
                 } else {
                     av_log(dst_fc, AV_LOG_ERROR, "The data type of CL image "
                            "from plane %d of image created from D3D11 texture index %d "
