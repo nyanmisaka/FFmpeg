@@ -2630,6 +2630,8 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
     cl_int cle;
     int err, i, p, nb_planes;
 
+    av_log(dst_fc, AV_LOG_VERBOSE, "libavutil,src_fc: %dx%d", src_fc->width, src_fc->height);
+
     // both AMD and Intel supports NV12 and P010,
     // but Intel requires D3D11_RESOURCE_MISC_SHARED.
     if (device_priv->d3d11_map_amd ||
