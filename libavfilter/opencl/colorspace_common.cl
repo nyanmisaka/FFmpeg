@@ -211,6 +211,24 @@ float lrgb2y(float3 c) {
 #endif
 }
 
+float3 lrgb2rgb(float3 c) {
+#ifdef delinearize
+    float r0 = delinearize(c.x);
+    float g0 = delinearize(c.y);
+    float b0 = delinearize(c.z);
+    c = (float3)(r0, g0, b0);
+#endif
+#ifdef RGB2RGB_PASSTHROUGH
+    return c;
+#else
+    float r = c.x, g = c.y, b = c.z;
+    float rr = rgb2rgb[0] * r + rgb2rgb[1] * g + rgb2rgb[2] * b;
+    float gg = rgb2rgb[3] * r + rgb2rgb[4] * g + rgb2rgb[5] * b;
+    float bb = rgb2rgb[6] * r + rgb2rgb[7] * g + rgb2rgb[8] * b;
+    return (float3)(rr, gg, bb);
+#endif
+}
+
 float3 lrgb2lrgb(float3 c) {
 #ifdef RGB2RGB_PASSTHROUGH
     return c;

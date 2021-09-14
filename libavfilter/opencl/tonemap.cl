@@ -126,6 +126,14 @@ float3 map_to_dst_space_from_yuv(float3 yuv, float peak) {
     return c;
 }
 
+__constant sampler_t sampler   = (CLK_NORMALIZED_COORDS_FALSE |
+                                  CLK_ADDRESS_CLAMP_TO_EDGE   |
+                                  CLK_FILTER_NEAREST);
+
+__constant sampler_t d_sampler = (CLK_NORMALIZED_COORDS_TRUE |
+                                  CLK_ADDRESS_REPEAT         |
+                                  CLK_FILTER_NEAREST);
+
 __kernel void tonemap(__write_only image2d_t dst1,
                       __read_only  image2d_t src1,
                       __write_only image2d_t dst2,
@@ -139,9 +147,6 @@ __kernel void tonemap(__write_only image2d_t dst1,
                       float peak
                       )
 {
-    const sampler_t sampler = (CLK_NORMALIZED_COORDS_FALSE |
-                               CLK_ADDRESS_CLAMP_TO_EDGE   |
-                               CLK_FILTER_NEAREST);
     int xi = get_global_id(0);
     int yi = get_global_id(1);
     // each work item process four pixels
@@ -172,7 +177,6 @@ __kernel void tonemap(__write_only image2d_t dst1,
         float sig3 = max(c3.x, max(c3.y, c3.z));
         float sig = max(sig0, max(sig1, max(sig2, sig3)));
 
-        float3 c0_old = c0, c1_old = c1, c2_old = c2;
         c0 = map_one_pixel_rgb(c0, peak);
         c1 = map_one_pixel_rgb(c1, peak);
         c2 = map_one_pixel_rgb(c2, peak);
