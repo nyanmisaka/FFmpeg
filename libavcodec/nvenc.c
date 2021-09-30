@@ -144,10 +144,80 @@ static int nvenc_print_error(AVCodecContext *avctx, NVENCSTATUS err,
     return ret;
 }
 
+typedef struct GUIDTuple {
+    const GUID guid;
+    int flags;
+} GUIDTuple;
+
+#define PRESET_ALIAS(alias, name, ...) \
+    [PRESET_ ## alias] = { NV_ENC_PRESET_ ## name ## _GUID, __VA_ARGS__ }
+
+#define PRESET(name, ...) PRESET_ALIAS(name, name, __VA_ARGS__)
+
+static void nvenc_map_preset(NvencContext *ctx)
+{
+    GUIDTuple presets[] = {
+#ifdef NVENC_HAVE_NEW_PRESETS
+        PRESET(P1),
+        PRESET(P2),
+        PRESET(P3),
+        PRESET(P4),
+        PRESET(P5),
+        PRESET(P6),
+        PRESET(P7),
+        PRESET_ALIAS(SLOW,   P7, NVENC_TWO_PASSES),
+        PRESET_ALIAS(MEDIUM, P4, NVENC_ONE_PASS),
+        PRESET_ALIAS(FAST,   P1, NVENC_ONE_PASS),
+        // Compat aliases
+        PRESET_ALIAS(DEFAULT,             P4, NVENC_DEPRECATED_PRESET),
+        PRESET_ALIAS(HP,                  P1, NVENC_DEPRECATED_PRESET),
+        PRESET_ALIAS(HQ,                  P7, NVENC_DEPRECATED_PRESET),
+        PRESET_ALIAS(BD,                  P5, NVENC_DEPRECATED_PRESET),
+        PRESET_ALIAS(LOW_LATENCY_DEFAULT, P4, NVENC_DEPRECATED_PRESET | NVENC_LOWLATENCY),
+        PRESET_ALIAS(LOW_LATENCY_HP,      P1, NVENC_DEPRECATED_PRESET | NVENC_LOWLATENCY),
+        PRESET_ALIAS(LOW_LATENCY_HQ,      P7, NVENC_DEPRECATED_PRESET | NVENC_LOWLATENCY),
+        PRESET_ALIAS(LOSSLESS_DEFAULT,    P4, NVENC_DEPRECATED_PRESET | NVENC_LOSSLESS),
+        PRESET_ALIAS(LOSSLESS_HP,         P1, NVENC_DEPRECATED_PRESET | NVENC_LOSSLESS),
+#else
+        PRESET(DEFAULT),
+        PRESET(HP),
+        PRESET(HQ),
+        PRESET(BD),
+        PRESET_ALIAS(SLOW,   HQ,    NVENC_TWO_PASSES),
+        PRESET_ALIAS(MEDIUM, HQ,    NVENC_ONE_PASS),
+        PRESET_ALIAS(FAST,   HP,    NVENC_ONE_PASS),
+        PRESET(LOW_LATENCY_DEFAULT, NVENC_LOWLATENCY),
+        PRESET(LOW_LATENCY_HP,      NVENC_LOWLATENCY),
+        PRESET(LOW_LATENCY_HQ,      NVENC_LOWLATENCY),
+        PRESET(LOSSLESS_DEFAULT,    NVENC_LOSSLESS),
+        PRESET(LOSSLESS_HP,         NVENC_LOSSLESS),
+#endif
+    };
+
+    GUIDTuple *t = &presets[ctx->preset];
+
+    ctx->init_encode_params.presetGUID = t->guid;
+    ctx->flags = t->flags;
+
+#ifdef NVENC_HAVE_NEW_PRESETS
+    if (ctx->tuning_info == NV_ENC_TUNING_INFO_LOSSLESS)
+        ctx->flags |= NVENC_LOSSLESS;
+#endif
+}
+
+#undef PRESET
+#undef PRESET_ALIAS
+
 static void nvenc_print_driver_requirement(AVCodecContext *avctx, int level)
 {
-#if NVENCAPI_CHECK_VERSION(11, 1)
+#if NVENCAPI_CHECK_VERSION(11, 2)
     const char *minver = "(unknown)";
+#elif NVENCAPI_CHECK_VERSION(11, 1)
+# if defined(_WIN32) || defined(__CYGWIN__)
+    const char *minver = "471.41";
+# else
+    const char *minver = "470.57.02";
+# endif
 #elif NVENCAPI_CHECK_VERSION(11, 0)
 # if defined(_WIN32) || defined(__CYGWIN__)
     const char *minver = "456.71";
@@ -358,7 +428,7 @@ static int nvenc_check_capabilities(AVCodecContext *avctx)
     }
 
     ret = nvenc_check_cap(avctx, NV_ENC_CAPS_SUPPORT_LOSSLESS_ENCODE);
-    if (ctx->preset >= PRESET_LOSSLESS_DEFAULT && ret <= 0) {
+    if (ctx->flags & NVENC_LOSSLESS && ret <= 0) {
         av_log(avctx, AV_LOG_WARNING, "Lossless encoding not supported\n");
         return AVERROR(ENOSYS);
     }
@@ -548,6 +618,11 @@ static av_cold int nvenc_setup_device(AVCodecContext *avctx)
         return AVERROR_BUG;
     }
 
+    nvenc_map_preset(ctx);
+
+    if (ctx->flags & NVENC_DEPRECATED_PRESET)
+        av_log(avctx, AV_LOG_WARNING, "The selected preset is deprecated. Use p1 to p7 + -tune or fast/medium/slow.\n");
+
     if (avctx->pix_fmt == AV_PIX_FMT_CUDA || avctx->pix_fmt == AV_PIX_FMT_D3D11 || avctx->hw_frames_ctx || avctx->hw_device_ctx) {
         AVHWFramesContext   *frames_ctx;
         AVHWDeviceContext   *hwdev_ctx;
@@ -637,65 +712,6 @@ static av_cold int nvenc_setup_device(AVCodecContext *avctx)
 
     return 0;
 }
-
-typedef struct GUIDTuple {
-    const GUID guid;
-    int flags;
-} GUIDTuple;
-
-#define PRESET_ALIAS(alias, name, ...) \
-    [PRESET_ ## alias] = { NV_ENC_PRESET_ ## name ## _GUID, __VA_ARGS__ }
-
-#define PRESET(name, ...) PRESET_ALIAS(name, name, __VA_ARGS__)
-
-static void nvenc_map_preset(NvencContext *ctx)
-{
-    GUIDTuple presets[] = {
-#ifdef NVENC_HAVE_NEW_PRESETS
-        PRESET(P1),
-        PRESET(P2),
-        PRESET(P3),
-        PRESET(P4),
-        PRESET(P5),
-        PRESET(P6),
-        PRESET(P7),
-        PRESET_ALIAS(SLOW,   P7, NVENC_TWO_PASSES),
-        PRESET_ALIAS(MEDIUM, P4, NVENC_ONE_PASS),
-        PRESET_ALIAS(FAST,   P1, NVENC_ONE_PASS),
-        // Compat aliases
-        PRESET_ALIAS(DEFAULT,             P4, NVENC_DEPRECATED_PRESET),
-        PRESET_ALIAS(HP,                  P1, NVENC_DEPRECATED_PRESET),
-        PRESET_ALIAS(HQ,                  P7, NVENC_DEPRECATED_PRESET),
-        PRESET_ALIAS(BD,                  P5, NVENC_DEPRECATED_PRESET),
-        PRESET_ALIAS(LOW_LATENCY_DEFAULT, P4, NVENC_DEPRECATED_PRESET | NVENC_LOWLATENCY),
-        PRESET_ALIAS(LOW_LATENCY_HP,      P1, NVENC_DEPRECATED_PRESET | NVENC_LOWLATENCY),
-        PRESET_ALIAS(LOW_LATENCY_HQ,      P7, NVENC_DEPRECATED_PRESET | NVENC_LOWLATENCY),
-        PRESET_ALIAS(LOSSLESS_DEFAULT,    P4, NVENC_DEPRECATED_PRESET | NVENC_LOSSLESS),
-        PRESET_ALIAS(LOSSLESS_HP,         P1, NVENC_DEPRECATED_PRESET | NVENC_LOSSLESS),
-#else
-        PRESET(DEFAULT),
-        PRESET(HP),
-        PRESET(HQ),
-        PRESET(BD),
-        PRESET_ALIAS(SLOW,   HQ,    NVENC_TWO_PASSES),
-        PRESET_ALIAS(MEDIUM, HQ,    NVENC_ONE_PASS),
-        PRESET_ALIAS(FAST,   HP,    NVENC_ONE_PASS),
-        PRESET(LOW_LATENCY_DEFAULT, NVENC_LOWLATENCY),
-        PRESET(LOW_LATENCY_HP,      NVENC_LOWLATENCY),
-        PRESET(LOW_LATENCY_HQ,      NVENC_LOWLATENCY),
-        PRESET(LOSSLESS_DEFAULT,    NVENC_LOSSLESS),
-        PRESET(LOSSLESS_HP,         NVENC_LOSSLESS),
-#endif
-    };
-
-    GUIDTuple *t = &presets[ctx->preset];
-
-    ctx->init_encode_params.presetGUID = t->guid;
-    ctx->flags = t->flags;
-}
-
-#undef PRESET
-#undef PRESET_ALIAS
 
 static av_cold void set_constqp(AVCodecContext *avctx)
 {
@@ -1043,7 +1059,7 @@ static av_cold int nvenc_setup_h264_config(AVCodecContext *avctx)
         || vui->videoFullRangeFlag != 0);
 
     h264->sliceMode = 3;
-    h264->sliceModeData = 1;
+    h264->sliceModeData = avctx->slices > 0 ? avctx->slices : 1;
 
     h264->disableSPSPPS = (avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) ? 1 : 0;
     h264->repeatSPSPPS  = (avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) ? 0 : 1;
@@ -1140,7 +1156,7 @@ static av_cold int nvenc_setup_hevc_config(AVCodecContext *avctx)
         || vui->videoFullRangeFlag != 0);
 
     hevc->sliceMode = 3;
-    hevc->sliceModeData = 1;
+    hevc->sliceModeData = avctx->slices > 0 ? avctx->slices : 1;
 
     hevc->disableSPSPPS = (avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) ? 1 : 0;
     hevc->repeatSPSPPS  = (avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) ? 0 : 1;
@@ -1254,18 +1270,15 @@ static av_cold int nvenc_setup_encoder(AVCodecContext *avctx)
 
     ctx->init_encode_params.encodeConfig = &ctx->encode_config;
 
-    nvenc_map_preset(ctx);
-
-    if (ctx->flags & NVENC_DEPRECATED_PRESET)
-        av_log(avctx, AV_LOG_WARNING, "The selected preset is deprecated. Use p1 to p7 + -tune or fast/medium/slow.\n");
-
     preset_config.version = NV_ENC_PRESET_CONFIG_VER;
     preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
 
 #ifdef NVENC_HAVE_NEW_PRESETS
     ctx->init_encode_params.tuningInfo = ctx->tuning_info;
 
-    if (ctx->flags & NVENC_LOWLATENCY)
+    if (ctx->flags & NVENC_LOSSLESS)
+        ctx->init_encode_params.tuningInfo = NV_ENC_TUNING_INFO_LOSSLESS;
+    else if (ctx->flags & NVENC_LOWLATENCY)
         ctx->init_encode_params.tuningInfo = NV_ENC_TUNING_INFO_LOW_LATENCY;
 
     nv_status = p_nvenc->nvEncGetEncodePresetConfigEx(ctx->nvencoder,
@@ -1307,9 +1320,6 @@ static av_cold int nvenc_setup_encoder(AVCodecContext *avctx)
      * */
     if (ctx->rc_lookahead == 0 && ctx->encode_config.rcParams.enableLookahead)
         ctx->rc_lookahead = ctx->encode_config.rcParams.lookaheadDepth;
-
-    if (ctx->init_encode_params.tuningInfo == NV_ENC_TUNING_INFO_LOSSLESS)
-        ctx->flags |= NVENC_LOSSLESS;
 #endif
 
     if (ctx->weighted_pred == 1)
