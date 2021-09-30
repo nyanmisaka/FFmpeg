@@ -282,6 +282,7 @@ extern AVFilter ff_vf_hwdownload;
 extern AVFilter ff_vf_hwmap;
 extern AVFilter ff_vf_hwupload;
 extern AVFilter ff_vf_hwupload_cuda;
+extern AVFilter ff_vf_hwupload_vaapi;
 extern AVFilter ff_vf_hysteresis;
 extern AVFilter ff_vf_identity;
 extern AVFilter ff_vf_idet;
