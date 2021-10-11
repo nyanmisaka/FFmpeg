@@ -129,6 +129,21 @@ typedef struct AVABufferSinkParams {
  */
 attribute_deprecated
 AVABufferSinkParams *av_abuffersink_params_alloc(void);
+
+/**
+ * Deprecated and unused struct to use for initializing an sbuffersink context.
+ */
+typedef struct AVSBufferSinkParams {
+    const int *subtitle_type;
+} AVSBufferSinkParams;
+
+/**
+ * Create an AVSBufferSinkParams structure.
+ *
+ * Must be freed with av_free().
+ */
+attribute_deprecated
+AVSBufferSinkParams *av_sbuffersink_params_alloc(void);
 #endif
 
 /**
