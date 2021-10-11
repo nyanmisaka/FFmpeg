@@ -311,6 +311,8 @@ static int filter_link_check_formats(void *log, AVFilterLink *link, AVFilterForm
             return ret;
         break;
 
+    case AVMEDIA_TYPE_SUBTITLE:
+        return 0;
     default:
         av_assert0(!"reached");
     }
@@ -441,6 +443,9 @@ static int query_formats(AVFilterGraph *graph, void *log_ctx)
             if (!link)
                 continue;
 
+            if (link->type == AVMEDIA_TYPE_SUBTITLE)
+                continue;
+                
             neg = ff_filter_get_negotiation(link);
             av_assert0(neg);
             for (neg_step = 1; neg_step < neg->nb_mergers; neg_step++) {
