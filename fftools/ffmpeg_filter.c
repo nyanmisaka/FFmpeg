@@ -22,6 +22,8 @@
 
 #include "ffmpeg.h"
 
+#include <libavutil/ass_split_internal.h>
+
 #include "libavfilter/avfilter.h"
 #include "libavfilter/buffersink.h"
 #include "libavfilter/buffersrc.h"
@@ -30,11 +32,9 @@
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "libavutil/channel_layout.h"
-#include "libavutil/display.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/pixfmt.h"
-#include "libavutil/imgutils.h"
 #include "libavutil/samplefmt.h"
 
 // FIXME: YUV420P etc. are actually supported with full color range,
@@ -221,9 +221,8 @@ static void init_input_filter(FilterGraph *fg, AVFilterInOut *in)
     enum AVMediaType type = avfilter_pad_get_type(in->filter_ctx->input_pads, in->pad_idx);
     int i;
 
-    // TODO: support other filter types
-    if (type != AVMEDIA_TYPE_VIDEO && type != AVMEDIA_TYPE_AUDIO) {
-        av_log(NULL, AV_LOG_FATAL, "Only video and audio filters supported "
+    if (type != AVMEDIA_TYPE_VIDEO && type != AVMEDIA_TYPE_AUDIO && type != AVMEDIA_TYPE_SUBTITLE) {
+        av_log(NULL, AV_LOG_FATAL, "Only video, audio and subtitle filters supported "
                "currently.\n");
         exit_program(1);
     }
@@ -244,8 +243,9 @@ static void init_input_filter(FilterGraph *fg, AVFilterInOut *in)
         for (i = 0; i < s->nb_streams; i++) {
             enum AVMediaType stream_type = s->streams[i]->codecpar->codec_type;
             if (stream_type != type &&
-                !(stream_type == AVMEDIA_TYPE_SUBTITLE &&
-                  type == AVMEDIA_TYPE_VIDEO /* sub2video hack */))
+                // in the followng case we auto-insert the graphicsub2video conversion filter 
+                // for retaining compatibility with the previous sub2video hack
+                !(stream_type == AVMEDIA_TYPE_SUBTITLE && type == AVMEDIA_TYPE_VIDEO))
                 continue;
             if (check_stream_specifier(s, s->streams[i], *p == ':' ? p + 1 : p) == 1) {
                 st = s->streams[i];
@@ -293,6 +293,13 @@ static void init_input_filter(FilterGraph *fg, AVFilterInOut *in)
     fg->inputs[fg->nb_inputs - 1]->format = -1;
     fg->inputs[fg->nb_inputs - 1]->type = ist->st->codecpar->codec_type;
     fg->inputs[fg->nb_inputs - 1]->name = describe_filter_link(fg, in, 1);
+
+    if (ist->st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE && ist->dec_ctx) {
+        const AVCodecDescriptor *codec_descriptor = ist->dec_ctx->codec_descriptor;
+        if (!codec_descriptor)
+            codec_descriptor = avcodec_descriptor_get(ist->dec_ctx->codec_id);
+        fg->inputs[fg->nb_inputs - 1]->format = av_get_subtitle_format_from_codecdesc(codec_descriptor);
+    }
 
     fg->inputs[fg->nb_inputs - 1]->frame_queue = av_fifo_alloc(8 * sizeof(AVFrame*));
     if (!fg->inputs[fg->nb_inputs - 1]->frame_queue)
@@ -413,6 +420,39 @@ static int insert_filter(AVFilterContext **last_filter, int *pad_idx,
 
     *last_filter = ctx;
     *pad_idx     = 0;
+    return 0;
+}
+
+static int configure_output_subtitle_filter(FilterGraph *fg, OutputFilter *ofilter, AVFilterInOut *out)
+{
+    OutputStream *ost = ofilter->ost;
+    AVFilterContext *last_filter = out->filter_ctx;
+    int pad_idx = out->pad_idx;
+    int ret;
+    char name[255];
+
+    snprintf(name, sizeof(name), "out_%d_%d", ost->file_index, ost->index);
+    ret = avfilter_graph_create_filter(&ofilter->filter,
+                                       avfilter_get_by_name("sbuffersink"),
+                                       name, NULL, NULL, fg->graph);
+
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Unable to create filter sbuffersink\n");
+        return ret;
+    }
+
+    ////snprintf(name, sizeof(name), "trim_out_%d_%d",
+    ////         ost->file_index, ost->index);
+    ////ret = insert_trim(of->start_time, of->recording_time,
+    ////                  &last_filter, &pad_idx, name);
+    ////if (ret < 0)
+    ////    return ret;
+
+    ////ost->st->codecpar->codec_tag = MKTAG('a', 's', 's', 's');
+
+    if ((ret = avfilter_link(last_filter, pad_idx, ofilter->filter, 0)) < 0)
+        return ret;
+
     return 0;
 }
 
@@ -594,7 +634,8 @@ static int configure_output_audio_filter(FilterGraph *fg, OutputFilter *ofilter,
         int i;
 
         for (i=0; i<of->ctx->nb_streams; i++)
-            if (of->ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+            if (of->ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
+                of->ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
                 break;
 
         if (i<of->ctx->nb_streams) {
@@ -628,6 +669,7 @@ static int configure_output_filter(FilterGraph *fg, OutputFilter *ofilter,
     switch (avfilter_pad_get_type(out->filter_ctx->output_pads, out->pad_idx)) {
     case AVMEDIA_TYPE_VIDEO: return configure_output_video_filter(fg, ofilter, out);
     case AVMEDIA_TYPE_AUDIO: return configure_output_audio_filter(fg, ofilter, out);
+    case AVMEDIA_TYPE_SUBTITLE: return configure_output_subtitle_filter(fg, ofilter, out);
     default: av_assert0(0); return 0;
     }
 }
@@ -647,51 +689,112 @@ void check_filter_outputs(void)
     }
 }
 
-static int sub2video_prepare(InputStream *ist, InputFilter *ifilter)
+static int configure_input_subtitle_filter(FilterGraph *fg, InputFilter *ifilter,
+                                        AVFilterInOut *in)
 {
-    AVFormatContext *avf = input_files[ist->file_index]->ctx;
-    int i, w, h;
+    AVFilterContext *last_filter;
+    const AVFilter *buffer_filt = avfilter_get_by_name("sbuffer");
+    InputStream *ist = ifilter->ist;
+    AVBPrint args;
+    char name[255];
+    int ret, pad_idx = 0;
+    int w, h;
+    AVBufferSrcParameters *par = av_buffersrc_parameters_alloc();
+    enum AVMediaType media_type;
 
-    /* Compute the size of the canvas for the subtitles stream.
-       If the subtitles codecpar has set a size, use it. Otherwise use the
-       maximum dimensions of the video streams in the same file. */
+    if (!par)
+        return AVERROR(ENOMEM);
+    memset(par, 0, sizeof(*par));
+    par->format = AV_PIX_FMT_NONE;
+
+    if (ist->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot connect subtitle filter to audio input\n");
+        ret = AVERROR(EINVAL);
+        goto fail;
+    }
+
+    if (ist->dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot connect subtitle filter to video input\n");
+        ret = AVERROR(EINVAL);
+        goto fail;
+    }
+
+    if (!ist->subtitle_heartbeat.header && ist->dec_ctx->subtitle_header && ist->dec_ctx->subtitle_header_size > 0) {
+        ist->subtitle_heartbeat.header = av_buffer_allocz(ist->dec_ctx->subtitle_header_size + 1);
+        if (!ist->subtitle_heartbeat.header)
+            return AVERROR(ENOMEM);
+        memcpy(ist->subtitle_heartbeat.header->data, ist->dec_ctx->subtitle_header, ist->dec_ctx->subtitle_header_size);
+    }
+
+    ist->subtitle_heartbeat.is_active = 1;
+
     w = ifilter->width;
     h = ifilter->height;
+
     if (!(w && h)) {
-        for (i = 0; i < avf->nb_streams; i++) {
-            if (avf->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-                w = FFMAX(w, avf->streams[i]->codecpar->width);
-                h = FFMAX(h, avf->streams[i]->codecpar->height);
-            }
-        }
-        if (!(w && h)) {
-            w = FFMAX(w, 720);
-            h = FFMAX(h, 576);
-        }
-        av_log(avf, AV_LOG_INFO, "sub2video: using %dx%d canvas\n", w, h);
+        w = ist->dec_ctx->width;
+        h = ist->dec_ctx->height;
     }
-    ist->sub2video.w = ifilter->width  = w;
-    ist->sub2video.h = ifilter->height = h;
 
-    ifilter->width  = ist->dec_ctx->width  ? ist->dec_ctx->width  : ist->sub2video.w;
-    ifilter->height = ist->dec_ctx->height ? ist->dec_ctx->height : ist->sub2video.h;
+    if (!(w && h) && ist->dec_ctx->subtitle_header) {
+        ASSSplitContext *ass_ctx = avpriv_ass_split((char *)ist->dec_ctx->subtitle_header);
+        ASS *ass = (ASS *)ass_ctx;
+        w = ass->script_info.play_res_x;
+        h = ass->script_info.play_res_y;
+        avpriv_ass_split_free(ass_ctx);
+    }
 
-    /* rectangles are AV_PIX_FMT_PAL8, but we have no guarantee that the
-       palettes for all rectangles are identical or compatible */
-    ifilter->format = AV_PIX_FMT_RGB32;
+    ist->subtitle_heartbeat.w = w;
+    ist->subtitle_heartbeat.h = h;
+    av_log(ifilter, AV_LOG_INFO, "subtitle input filter: decoding size %dx%d\n", ist->subtitle_heartbeat.w, ist->subtitle_heartbeat.h);
 
-    ist->sub2video.frame = av_frame_alloc();
-    if (!ist->sub2video.frame)
-        return AVERROR(ENOMEM);
-    ist->sub2video.last_pts = INT64_MIN;
-    ist->sub2video.end_pts  = INT64_MIN;
+    ifilter->width = w;
+    ifilter->height = h;
+    ist->dec_ctx->width = w;
+    ist->dec_ctx->height = h;
 
-    /* sub2video structure has been (re-)initialized.
-       Mark it as such so that the system will be
-       initialized with the first received heartbeat. */
-    ist->sub2video.initialize = 1;
+    ist->subtitle_heartbeat.last_pts = INT64_MIN;
+
+    snprintf(name, sizeof(name), "graph %d subtitle input from stream %d:%d", fg->index,
+             ist->file_index, ist->st->index);
+
+
+    av_bprint_init(&args, 0, AV_BPRINT_SIZE_AUTOMATIC);
+    av_bprintf(&args,
+             "subtitle_type=%d:width=%d:height=%d:time_base=%d/%d:",
+             ifilter->format, ifilter->width, ifilter->height,
+             ist->st->time_base.num, ist->st->time_base.den);
+    if ((ret = avfilter_graph_create_filter(&ifilter->filter, buffer_filt, name,
+                                            args.str, NULL, fg->graph)) < 0)
+        goto fail;
+
+    par->hw_frames_ctx = ifilter->hw_frames_ctx;
+    par->format = ifilter->format;
+    par->width = ifilter->width;
+    par->height = ifilter->height;
+
+    ret = av_buffersrc_parameters_set(ifilter->filter, par);
+    if (ret < 0)
+        goto fail;
+    av_freep(&par);
+    last_filter = ifilter->filter;
+
+    media_type = avfilter_pad_get_type(in->filter_ctx->input_pads, in->pad_idx);
+    if (media_type == AVMEDIA_TYPE_VIDEO) {
+        av_log(NULL, AV_LOG_INFO, "Auto-inserting graphicsub2video filter\n");
+        ret = insert_filter(&last_filter, &pad_idx, "graphicsub2video", NULL);
+        if (ret < 0)
+            return ret;
+    }
+
+    if ((ret = avfilter_link(last_filter, 0, in->filter_ctx, in->pad_idx)) < 0)
+        return ret;
 
     return 0;
+fail:
+    av_freep(&par);
+
+    return ret;
 }
 
 static int configure_input_video_filter(FilterGraph *fg, InputFilter *ifilter,
@@ -710,8 +813,15 @@ static int configure_input_video_filter(FilterGraph *fg, InputFilter *ifilter,
     char name[255];
     int ret, pad_idx = 0;
     int64_t tsoffset = 0;
-    AVBufferSrcParameters *par = av_buffersrc_parameters_alloc();
+    AVBufferSrcParameters *par;
 
+    if (ist->dec_ctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+        // Automatically insert conversion filter to retain compatibility
+        // with sub2video command lines
+        return configure_input_subtitle_filter(fg, ifilter, in);
+    }
+
+    par = av_buffersrc_parameters_alloc();
     if (!par)
         return AVERROR(ENOMEM);
     memset(par, 0, sizeof(*par));
@@ -726,12 +836,6 @@ static int configure_input_video_filter(FilterGraph *fg, InputFilter *ifilter,
     if (!fr.num)
         fr = av_guess_frame_rate(input_files[ist->file_index]->ctx, ist->st, NULL);
 
-    if (ist->dec_ctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
-        ret = sub2video_prepare(ist, ifilter);
-        if (ret < 0)
-            goto fail;
-    }
-
     sar = ifilter->sample_aspect_ratio;
     if(!sar.den)
         sar = (AVRational){0,1};
@@ -743,7 +847,7 @@ static int configure_input_video_filter(FilterGraph *fg, InputFilter *ifilter,
              tb.num, tb.den, sar.num, sar.den);
     if (fr.num && fr.den)
         av_bprintf(&args, ":frame_rate=%d/%d", fr.num, fr.den);
-    snprintf(name, sizeof(name), "graph %d input from stream %d:%d", fg->index,
+    snprintf(name, sizeof(name), "graph %d video input from stream %d:%d", fg->index,
              ist->file_index, ist->st->index);
 
 
@@ -966,6 +1070,7 @@ static int configure_input_filter(FilterGraph *fg, InputFilter *ifilter,
     switch (avfilter_pad_get_type(in->filter_ctx->input_pads, in->pad_idx)) {
     case AVMEDIA_TYPE_VIDEO: return configure_input_video_filter(fg, ifilter, in);
     case AVMEDIA_TYPE_AUDIO: return configure_input_audio_filter(fg, ifilter, in);
+    case AVMEDIA_TYPE_SUBTITLE: return configure_input_subtitle_filter(fg, ifilter, in);
     default: av_assert0(0); return 0;
     }
 }
@@ -1133,19 +1238,6 @@ int configure_filtergraph(FilterGraph *fg)
         }
     }
 
-    /* process queued up subtitle packets */
-    for (i = 0; i < fg->nb_inputs; i++) {
-        InputStream *ist = fg->inputs[i]->ist;
-        if (ist->sub2video.sub_queue && ist->sub2video.frame) {
-            while (av_fifo_size(ist->sub2video.sub_queue)) {
-                AVSubtitle tmp;
-                av_fifo_generic_read(ist->sub2video.sub_queue, &tmp, sizeof(tmp), NULL);
-                sub2video_update(ist, INT64_MIN, &tmp);
-                avsubtitle_free(&tmp);
-            }
-        }
-    }
-
     return 0;
 
 fail:
@@ -1168,6 +1260,7 @@ int ifilter_parameters_from_frame(InputFilter *ifilter, const AVFrame *frame)
     ifilter->sample_rate         = frame->sample_rate;
     ifilter->channels            = frame->channels;
     ifilter->channel_layout      = frame->channel_layout;
+    ifilter->type                = frame->type;
 
     av_freep(&ifilter->displaymatrix);
     sd = av_frame_get_side_data(frame, AV_FRAME_DATA_DISPLAYMATRIX);
