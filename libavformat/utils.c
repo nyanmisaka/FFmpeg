@@ -31,6 +31,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/pixfmt.h"
+#include "libavutil/subfmt.h"
 #include "libavutil/thread.h"
 #include "libavutil/time.h"
 

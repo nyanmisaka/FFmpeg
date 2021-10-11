@@ -35,6 +35,7 @@
 #include "libavutil/frame.h"
 #include "libavutil/log.h"
 #include "libavutil/pixfmt.h"
+#include "libavutil/subfmt.h"
 #include "libavutil/rational.h"
 
 #include "codec.h"
@@ -1674,7 +1675,7 @@ typedef struct AVCodecContext {
 
     /**
      * Header containing style information for text subtitles.
-     * For SUBTITLE_ASS subtitle type, it should contain the whole ASS
+     * For AV_SUBTITLE_FMT_ASS subtitle type, it should contain the whole ASS
      * [Script Info] and [V4+ Styles] section, plus the [Events] line and
      * the Format line following. It shouldn't include any Dialogue line.
      * - encoding: Set/allocated/freed by user (before avcodec_open2())
@@ -2238,62 +2239,7 @@ typedef struct AVHWAccel {
  * @}
  */
 
-enum AVSubtitleType {
-    SUBTITLE_NONE,
-
-    SUBTITLE_BITMAP,                ///< A bitmap, pict will be set
-
-    /**
-     * Plain text, the text field must be set by the decoder and is
-     * authoritative. ass and pict fields may contain approximations.
-     */
-    SUBTITLE_TEXT,
-
-    /**
-     * Formatted text, the ass field must be set by the decoder and is
-     * authoritative. pict and text fields may contain approximations.
-     */
-    SUBTITLE_ASS,
-};
-
 #define AV_SUBTITLE_FLAG_FORCED 0x00000001
-
-typedef struct AVSubtitleRect {
-    int x;         ///< top left corner  of pict, undefined when pict is not set
-    int y;         ///< top left corner  of pict, undefined when pict is not set
-    int w;         ///< width            of pict, undefined when pict is not set
-    int h;         ///< height           of pict, undefined when pict is not set
-    int nb_colors; ///< number of colors in pict, undefined when pict is not set
-
-    /**
-     * data+linesize for the bitmap of this subtitle.
-     * Can be set for text/ass as well once they are rendered.
-     */
-    uint8_t *data[4];
-    int linesize[4];
-
-    enum AVSubtitleType type;
-
-    char *text;                     ///< 0 terminated plain UTF-8 text
-
-    /**
-     * 0 terminated ASS/SSA compatible event line.
-     * The presentation of this is unaffected by the other values in this
-     * struct.
-     */
-    char *ass;
-
-    int flags;
-} AVSubtitleRect;
-
-typedef struct AVSubtitle {
-    uint16_t format; /* 0 = graphics */
-    uint32_t start_display_time; /* relative to packet pts, in ms */
-    uint32_t end_display_time; /* relative to packet pts, in ms */
-    unsigned num_rects;
-    AVSubtitleRect **rects;
-    int64_t pts;    ///< Same as packet pts, in AV_TIME_BASE
-} AVSubtitle;
 
 /**
  * Return the LIBAVCODEC_VERSION_INT constant.
@@ -2431,13 +2377,6 @@ int avcodec_open2(AVCodecContext *avctx, const AVCodec *codec, AVDictionary **op
 int avcodec_close(AVCodecContext *avctx);
 
 /**
- * Free all allocated data in the given subtitle struct.
- *
- * @param sub AVSubtitle to free.
- */
-void avsubtitle_free(AVSubtitle *sub);
-
-/**
  * @}
  */
 
@@ -2527,6 +2466,8 @@ enum AVChromaLocation avcodec_chroma_pos_to_enum(int xpos, int ypos);
  *                 must be freed with avsubtitle_free if *got_sub_ptr is set.
  * @param[in,out] got_sub_ptr Zero if no subtitle could be decompressed, otherwise, it is nonzero.
  * @param[in] avpkt The input AVPacket containing the input buffer.
+ *
+ * @deprecated Use the new decode API (avcodec_send_packet, avcodec_receive_frame) instead.
  */
 int avcodec_decode_subtitle2(AVCodecContext *avctx, AVSubtitle *sub,
                             int *got_sub_ptr,
@@ -3124,6 +3065,14 @@ void avcodec_flush_buffers(AVCodecContext *avctx);
  *                     determine.
  */
 int av_get_audio_frame_duration(AVCodecContext *avctx, int frame_bytes);
+
+/**
+ * Return subtitle format from a codec descriptor
+ *
+ * @param codec_descriptor codec descriptor
+ * @return                 the subtitle type (e.g. bitmap, text)
+ */
+enum AVSubtitleType av_get_subtitle_format_from_codecdesc(const AVCodecDescriptor *codec_descriptor);
 
 /* memory */
 

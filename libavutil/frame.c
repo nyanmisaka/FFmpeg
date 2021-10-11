@@ -26,6 +26,7 @@
 #include "imgutils.h"
 #include "mem.h"
 #include "samplefmt.h"
+#include "subfmt.h"
 #include "hwcontext.h"
 
 #define CHECK_CHANNELS_CONSISTENCY(frame) \
@@ -50,6 +51,9 @@ const char *av_get_colorspace_name(enum AVColorSpace val)
     return name[val];
 }
 #endif
+
+static int frame_copy_subtitles(AVFrame *dst, const AVFrame *src, int copy_data);
+
 static void get_frame_defaults(AVFrame *frame)
 {
     if (frame->extended_data != frame->data)
@@ -72,7 +76,12 @@ static void get_frame_defaults(AVFrame *frame)
     frame->colorspace          = AVCOL_SPC_UNSPECIFIED;
     frame->color_range         = AVCOL_RANGE_UNSPECIFIED;
     frame->chroma_location     = AVCHROMA_LOC_UNSPECIFIED;
-    frame->flags               = 0;
+    frame->subtitle_start_time = 0;
+    frame->subtitle_end_time   = 0;
+    frame->num_subtitle_areas  = 0;
+    frame->subtitle_areas      = NULL;
+    frame->subtitle_pts        = 0;
+    frame->subtitle_header     = NULL;
 }
 
 static void free_side_data(AVFrameSideData **ptr_sd)
@@ -243,23 +252,52 @@ static int get_audio_buffer(AVFrame *frame, int align)
 
 }
 
+static int get_subtitle_buffer(AVFrame *frame)
+{
+    // Buffers in AVFrame->buf[] are not used in case of subtitle frames.
+    // To accomodate with existing code, checking ->buf[0] to determine
+    // whether a frame is ref-counted or has data, we're adding a 1-byte
+    // buffer here, which marks the subtitle frame to contain data.
+    frame->buf[0] = av_buffer_alloc(1);
+    if (!frame->buf[0]) {
+        av_frame_unref(frame);
+        return AVERROR(ENOMEM);
+    }
+    return 0;
+}
+
 int av_frame_get_buffer(AVFrame *frame, int align)
+{
+    if (frame->width > 0 && frame->height > 0)
+        frame->type = AVMEDIA_TYPE_VIDEO;
+    else if (frame->nb_samples > 0 && (frame->channel_layout || frame->channels > 0))
+        frame->type = AVMEDIA_TYPE_AUDIO;
+
+    return av_frame_get_buffer2(frame, align);
+}
+
+int av_frame_get_buffer2(AVFrame *frame, int align)
 {
     if (frame->format < 0)
         return AVERROR(EINVAL);
 
-    if (frame->width > 0 && frame->height > 0)
+    switch(frame->type) {
+    case AVMEDIA_TYPE_VIDEO:
         return get_video_buffer(frame, align);
-    else if (frame->nb_samples > 0 && (frame->channel_layout || frame->channels > 0))
+    case AVMEDIA_TYPE_AUDIO:
         return get_audio_buffer(frame, align);
-
-    return AVERROR(EINVAL);
+    case AVMEDIA_TYPE_SUBTITLE:
+        return get_subtitle_buffer(frame);
+    default:
+        return AVERROR(EINVAL);
+    }
 }
 
 static int frame_copy_props(AVFrame *dst, const AVFrame *src, int force_copy)
 {
     int ret, i;
 
+    dst->type                   = src->type;
     dst->key_frame              = src->key_frame;
     dst->pict_type              = src->pict_type;
     dst->sample_aspect_ratio    = src->sample_aspect_ratio;
@@ -290,6 +328,12 @@ static int frame_copy_props(AVFrame *dst, const AVFrame *src, int force_copy)
     dst->colorspace             = src->colorspace;
     dst->color_range            = src->color_range;
     dst->chroma_location        = src->chroma_location;
+    dst->subtitle_start_time    = src->subtitle_start_time;
+    dst->subtitle_end_time      = src->subtitle_end_time;
+    dst->subtitle_pts           = src->subtitle_pts;
+
+    if ((ret = av_buffer_replace(&dst->subtitle_header, src->subtitle_header)) < 0)
+        return ret;
 
     av_dict_copy(&dst->metadata, src->metadata, 0);
 
@@ -331,6 +375,7 @@ int av_frame_ref(AVFrame *dst, const AVFrame *src)
     av_assert1(dst->width == 0 && dst->height == 0);
     av_assert1(dst->channels == 0);
 
+    dst->type           = src->type;
     dst->format         = src->format;
     dst->width          = src->width;
     dst->height         = src->height;
@@ -344,7 +389,7 @@ int av_frame_ref(AVFrame *dst, const AVFrame *src)
 
     /* duplicate the frame data if it's not refcounted */
     if (!src->buf[0]) {
-        ret = av_frame_get_buffer(dst, 0);
+        ret = av_frame_get_buffer2(dst, 0);
         if (ret < 0)
             goto fail;
 
@@ -365,6 +410,10 @@ int av_frame_ref(AVFrame *dst, const AVFrame *src)
             goto fail;
         }
     }
+
+    /* copy subtitle areas */
+    if (src->type == AVMEDIA_TYPE_SUBTITLE)
+        frame_copy_subtitles(dst, src, 0);
 
     if (src->extended_buf) {
         dst->extended_buf = av_calloc(src->nb_extended_buf,
@@ -436,7 +485,7 @@ AVFrame *av_frame_clone(const AVFrame *src)
 
 void av_frame_unref(AVFrame *frame)
 {
-    int i;
+    unsigned i, n;
 
     if (!frame)
         return;
@@ -455,6 +504,21 @@ void av_frame_unref(AVFrame *frame)
     av_buffer_unref(&frame->opaque_ref);
     av_buffer_unref(&frame->private_ref);
 
+    av_buffer_unref(&frame->subtitle_header);
+
+    for (i = 0; i < frame->num_subtitle_areas; i++) {
+        AVSubtitleArea *area = frame->subtitle_areas[i];
+
+        for (n = 0; n < FF_ARRAY_ELEMS(area->buf); n++)
+            av_buffer_unref(&area->buf[n]);
+
+        av_freep(&area->text);
+        av_freep(&area->ass);
+        av_free(area);
+    }
+
+    av_freep(&frame->subtitle_areas);
+
     get_frame_defaults(frame);
 }
 
@@ -472,7 +536,8 @@ void av_frame_move_ref(AVFrame *dst, AVFrame *src)
 
 int av_frame_is_writable(AVFrame *frame)
 {
-    int i, ret = 1;
+    AVSubtitleArea *area;
+    unsigned i, n, ret = 1;
 
     /* assume non-refcounted frames are not writable */
     if (!frame->buf[0])
@@ -483,6 +548,15 @@ int av_frame_is_writable(AVFrame *frame)
             ret &= !!av_buffer_is_writable(frame->buf[i]);
     for (i = 0; i < frame->nb_extended_buf; i++)
         ret &= !!av_buffer_is_writable(frame->extended_buf[i]);
+
+    for (i = 0; i < frame->num_subtitle_areas; i++) {
+        area = frame->subtitle_areas[i];
+        if (area) {
+            for (n = 0; n < FF_ARRAY_ELEMS(area->buf); n++)
+                if (area->buf[n])
+                    ret &= !!av_buffer_is_writable(area->buf[n]);
+            }
+    }
 
     return ret;
 }
@@ -499,6 +573,7 @@ int av_frame_make_writable(AVFrame *frame)
         return 0;
 
     memset(&tmp, 0, sizeof(tmp));
+    tmp.type           = frame->type;
     tmp.format         = frame->format;
     tmp.width          = frame->width;
     tmp.height         = frame->height;
@@ -509,7 +584,7 @@ int av_frame_make_writable(AVFrame *frame)
     if (frame->hw_frames_ctx)
         ret = av_hwframe_get_buffer(frame->hw_frames_ctx, &tmp, 0);
     else
-        ret = av_frame_get_buffer(&tmp, 0);
+        ret = av_frame_get_buffer2(&tmp, 0);
     if (ret < 0)
         return ret;
 
@@ -544,14 +619,22 @@ AVBufferRef *av_frame_get_plane_buffer(AVFrame *frame, int plane)
     uint8_t *data;
     int planes, i;
 
-    if (frame->nb_samples) {
-        int channels = frame->channels;
-        if (!channels)
-            return NULL;
-        CHECK_CHANNELS_CONSISTENCY(frame);
-        planes = av_sample_fmt_is_planar(frame->format) ? channels : 1;
-    } else
+    switch(frame->type) {
+    case AVMEDIA_TYPE_VIDEO:
         planes = 4;
+        break;
+    case AVMEDIA_TYPE_AUDIO:
+        {
+            int channels = frame->channels;
+            if (!channels)
+                return NULL;
+            CHECK_CHANNELS_CONSISTENCY(frame);
+            planes = av_sample_fmt_is_planar(frame->format) ? channels : 1;
+            break;
+        }
+    default:
+        return NULL;
+    }
 
     if (plane < 0 || plane >= planes || !frame->extended_data[plane])
         return NULL;
@@ -675,17 +758,39 @@ static int frame_copy_audio(AVFrame *dst, const AVFrame *src)
     return 0;
 }
 
+static int frame_copy_subtitles(AVFrame *dst, const AVFrame *src, int copy_data)
+{
+    dst->format = src->format;
+
+    dst->num_subtitle_areas = src->num_subtitle_areas;
+
+    if (src->num_subtitle_areas) {
+        dst->subtitle_areas = av_malloc_array(src->num_subtitle_areas, sizeof(AVSubtitleArea *));
+
+        for (unsigned i = 0; i < src->num_subtitle_areas; i++) {
+            dst->subtitle_areas[i] = av_mallocz(sizeof(AVSubtitleArea));
+            av_subtitle_area2area(dst->subtitle_areas[i], src->subtitle_areas[i], copy_data);
+        }
+    }
+
+    return 0;
+}
+
 int av_frame_copy(AVFrame *dst, const AVFrame *src)
 {
     if (dst->format != src->format || dst->format < 0)
         return AVERROR(EINVAL);
 
-    if (dst->width > 0 && dst->height > 0)
+    switch(dst->type) {
+    case AVMEDIA_TYPE_VIDEO:
         return frame_copy_video(dst, src);
-    else if (dst->nb_samples > 0 && dst->channels > 0)
+    case AVMEDIA_TYPE_AUDIO:
         return frame_copy_audio(dst, src);
-
-    return AVERROR(EINVAL);
+    case AVMEDIA_TYPE_SUBTITLE:
+        return frame_copy_subtitles(dst, src, 1);
+    default:
+        return AVERROR(EINVAL);
+    }
 }
 
 void av_frame_remove_side_data(AVFrame *frame, enum AVFrameSideDataType type)
@@ -831,3 +936,49 @@ int av_frame_apply_cropping(AVFrame *frame, int flags)
 
     return 0;
 }
+
+/**
+ * Copies subtitle data from AVSubtitle (deprecated) to AVFrame
+ *
+ * @note This is a compatibility method for conversion to the legacy API
+ */
+void av_frame_put_subtitle(AVFrame *frame, AVSubtitle *sub)
+{
+    frame->format              = sub->format;
+    frame->subtitle_start_time = sub->start_display_time;
+    frame->subtitle_end_time   = sub->end_display_time;
+    frame->subtitle_pts        = sub->pts;
+    frame->num_subtitle_areas  = sub->num_rects;
+
+    if (sub->num_rects) {
+        frame->subtitle_areas = av_malloc_array(sub->num_rects, sizeof(AVSubtitleArea *));
+
+        for (unsigned i = 0; i < sub->num_rects; i++) {
+            frame->subtitle_areas[i] = av_mallocz(sizeof(AVSubtitleArea));
+            av_subtitle_rect2area(frame->subtitle_areas[i], sub->rects[i]);
+        }
+    }
+}
+
+/**
+ * Copies subtitle data from AVFrame to AVSubtitle (deprecated)
+ *
+ * @note This is a compatibility method for conversion to the legacy API
+ */
+void av_frame_get_subtitle(AVSubtitle *sub, AVFrame *frame)
+{
+    sub->start_display_time = frame->subtitle_start_time;
+    sub->end_display_time   = frame->subtitle_end_time;
+    sub->pts                = frame->subtitle_pts;
+    sub->num_rects          = frame->num_subtitle_areas;
+
+    if (frame->num_subtitle_areas) {
+        sub->rects = av_malloc_array(frame->num_subtitle_areas, sizeof(AVSubtitle *));
+
+        for (unsigned i = 0; i < frame->num_subtitle_areas; i++) {
+            sub->rects[i] = av_mallocz(sizeof(AVSubtitleRect));
+            av_subtitle_area2rect(sub->rects[i], frame->subtitle_areas[i]);
+        }
+    }
+}
+

@@ -824,6 +824,17 @@ int av_get_audio_frame_duration(AVCodecContext *avctx, int frame_bytes)
     return FFMAX(0, duration);
 }
 
+enum AVSubtitleType av_get_subtitle_format_from_codecdesc(const AVCodecDescriptor *codec_descriptor)
+{
+    if(codec_descriptor->props & AV_CODEC_PROP_BITMAP_SUB)
+        return AV_SUBTITLE_FMT_BITMAP;
+
+    if(codec_descriptor->props & AV_CODEC_PROP_TEXT_SUB)
+        return AV_SUBTITLE_FMT_ASS;
+
+    return AV_SUBTITLE_FMT_UNKNOWN;
+}
+
 int av_get_audio_frame_duration2(AVCodecParameters *par, int frame_bytes)
 {
     int duration = get_audio_frame_duration(par->codec_id, par->sample_rate,
