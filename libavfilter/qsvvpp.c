@@ -488,9 +488,6 @@ static QSVFrame *query_frame(QSVVPPContext *s, AVFilterLink *outlink)
         if (!out_frame->frame)
             return NULL;
 
-        out_frame->frame->width  = outlink->w;
-        out_frame->frame->height = outlink->h;
-
         ret = map_frame_to_surface(out_frame->frame,
                                   &out_frame->surface_internal);
         if (ret < 0)
@@ -499,6 +496,8 @@ static QSVFrame *query_frame(QSVVPPContext *s, AVFilterLink *outlink)
         out_frame->surface = &out_frame->surface_internal;
     }
 
+    out_frame->frame->width  = outlink->w;
+    out_frame->frame->height = outlink->h;
     out_frame->surface->Info = s->vpp_param.vpp.Out;
 
     return out_frame;

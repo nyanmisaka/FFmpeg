@@ -275,7 +275,7 @@ static mfxStatus frame_get_hdl(mfxHDL pthis, mfxMemId mid, mfxHDL *hdl)
     return MFX_ERR_NONE;
 }
 
-static int init_out_session(AVFilterContext *ctx)
+static int init_out_session(AVFilterContext *ctx, int in_width, int in_height)
 {
 
     QSVScaleContext                   *s = ctx->priv;
@@ -392,8 +392,11 @@ static int init_out_session(AVFilterContext *ctx)
                                          sizeof(*s->mem_ids_in));
         if (!s->mem_ids_in)
             return AVERROR(ENOMEM);
-        for (i = 0; i < in_frames_hwctx->nb_surfaces; i++)
+        for (i = 0; i < in_frames_hwctx->nb_surfaces; i++) {
             s->mem_ids_in[i] = in_frames_hwctx->surfaces[i].Data.MemId;
+            in_frames_hwctx->surfaces[i].Info.CropW = in_width;
+            in_frames_hwctx->surfaces[i].Info.CropH = in_height;
+        }
         s->nb_mem_ids_in = in_frames_hwctx->nb_surfaces;
 
         s->mem_ids_out = av_mallocz_array(out_frames_hwctx->nb_surfaces,
@@ -465,7 +468,7 @@ static int init_scale_session(AVFilterContext *ctx, int in_width, int in_height,
     if (ret < 0)
         return ret;
 
-    ret = init_out_session(ctx);
+    ret = init_out_session(ctx, in_width, in_height);
     if (ret < 0)
         return ret;
 
