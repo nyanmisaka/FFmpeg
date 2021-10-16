@@ -2638,33 +2638,6 @@ typedef struct AVHWAccel {
  * @}
  */
 
-#if FF_API_AVPICTURE
-/**
- * @defgroup lavc_picture AVPicture
- *
- * Functions for working with AVPicture
- * @{
- */
-
-/**
- * Picture data structure.
- *
- * Up to four components can be stored into it, the last component is
- * alpha.
- * @deprecated use AVFrame or imgutils functions instead
- */
-typedef struct AVPicture {
-    attribute_deprecated
-    uint8_t *data[AV_NUM_DATA_POINTERS];    ///< pointers to the image data planes
-    attribute_deprecated
-    int linesize[AV_NUM_DATA_POINTERS];     ///< number of bytes per line
-} AVPicture;
-
-/**
- * @}
- */
-#endif
-
 #define AV_SUBTITLE_FLAG_FORCED 0x00000001
 
 #if FF_API_NEXT
@@ -3671,71 +3644,6 @@ int avcodec_encode_subtitle(AVCodecContext *avctx, uint8_t *buf, int buf_size,
 /**
  * @}
  */
-
-#if FF_API_AVPICTURE
-/**
- * @addtogroup lavc_picture
- * @{
- */
-
-/**
- * @deprecated unused
- */
-attribute_deprecated
-int avpicture_alloc(AVPicture *picture, enum AVPixelFormat pix_fmt, int width, int height);
-
-/**
- * @deprecated unused
- */
-attribute_deprecated
-void avpicture_free(AVPicture *picture);
-
-/**
- * @deprecated use av_image_fill_arrays() instead.
- */
-attribute_deprecated
-int avpicture_fill(AVPicture *picture, const uint8_t *ptr,
-                   enum AVPixelFormat pix_fmt, int width, int height);
-
-/**
- * @deprecated use av_image_copy_to_buffer() instead.
- */
-attribute_deprecated
-int avpicture_layout(const AVPicture *src, enum AVPixelFormat pix_fmt,
-                     int width, int height,
-                     unsigned char *dest, int dest_size);
-
-/**
- * @deprecated use av_image_get_buffer_size() instead.
- */
-attribute_deprecated
-int avpicture_get_size(enum AVPixelFormat pix_fmt, int width, int height);
-
-/**
- * @deprecated av_image_copy() instead.
- */
-attribute_deprecated
-void av_picture_copy(AVPicture *dst, const AVPicture *src,
-                     enum AVPixelFormat pix_fmt, int width, int height);
-
-/**
- * @deprecated unused
- */
-attribute_deprecated
-int av_picture_crop(AVPicture *dst, const AVPicture *src,
-                    enum AVPixelFormat pix_fmt, int top_band, int left_band);
-
-/**
- * @deprecated unused
- */
-attribute_deprecated
-int av_picture_pad(AVPicture *dst, const AVPicture *src, int height, int width, enum AVPixelFormat pix_fmt,
-            int padtop, int padbottom, int padleft, int padright, int *color);
-
-/**
- * @}
- */
-#endif
 
 /**
  * @defgroup lavc_misc Utility functions
