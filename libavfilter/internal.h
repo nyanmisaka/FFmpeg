@@ -81,6 +81,14 @@ struct AVFilterPad {
     AVFrame *(*get_audio_buffer)(AVFilterLink *link, int nb_samples);
 
     /**
+     * Callback function to get an subtitle buffer. If NULL, the filter system will
+     * use ff_default_get_subtitles_buffer().
+     *
+     * Input subtitle pads only.
+     */
+    AVFrame *(*get_subtitle_buffer)(AVFilterLink *link, int format);
+
+    /**
      * Filtering callback. This is where a filter receives a frame with
      * audio/video data and should do its processing.
      *

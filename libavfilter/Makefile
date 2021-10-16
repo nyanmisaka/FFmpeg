@@ -19,6 +19,7 @@ OBJS = allfilters.o                                                     \
        framequeue.o                                                     \
        graphdump.o                                                      \
        graphparser.o                                                    \
+       subtitles.o                                                      \
        transform.o                                                      \
        video.o                                                          \
 
