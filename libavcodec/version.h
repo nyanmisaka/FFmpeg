@@ -87,9 +87,6 @@
 #ifndef FF_API_PRIVATE_OPT
 #define FF_API_PRIVATE_OPT      (LIBAVCODEC_VERSION_MAJOR < 59)
 #endif
-#ifndef FF_API_ASS_TIMING
-#define FF_API_ASS_TIMING       (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
 #ifndef FF_API_OLD_BSF
 #define FF_API_OLD_BSF          (LIBAVCODEC_VERSION_MAJOR < 59)
 #endif
