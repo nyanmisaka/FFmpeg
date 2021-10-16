@@ -526,8 +526,10 @@ extern AVFilter ff_avsrc_movie;
  * being the same while having different 'types'). */
 extern  AVFilter ff_asrc_abuffer;
 extern  AVFilter ff_vsrc_buffer;
+extern  AVFilter ff_ssrc_sbuffer;
 extern  AVFilter ff_asink_abuffer;
 extern  AVFilter ff_vsink_buffer;
+extern  AVFilter ff_ssink_sbuffer;
 extern AVFilter ff_af_afifo;
 extern AVFilter ff_vf_fifo;
 

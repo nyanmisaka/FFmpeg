@@ -29,6 +29,8 @@
 #include "libavutil/internal.h"
 #include "libavutil/opt.h"
 
+#include "libavcodec/avcodec.h"
+
 #define FF_INTERNAL_FIELDS 1
 #include "framequeue.h"
 
@@ -56,6 +58,10 @@ typedef struct BufferSinkContext {
     int all_channel_counts;
     int *sample_rates;                      ///< list of accepted sample rates, terminated by -1
     int sample_rates_size;
+
+    /* only used for subtitles */
+    enum AVSubtitleType *subtitle_types;     ///< list of accepted subtitle types, must be terminated with -1
+    int subtitle_types_size;
 
     AVFrame *peeked_frame;
 } BufferSinkContext;
@@ -163,6 +169,15 @@ AVBufferSinkParams *av_buffersink_params_alloc(void)
 AVABufferSinkParams *av_abuffersink_params_alloc(void)
 {
     AVABufferSinkParams *params = av_mallocz(sizeof(AVABufferSinkParams));
+
+    if (!params)
+        return NULL;
+    return params;
+}
+
+AVSBufferSinkParams *av_sbuffersink_params_alloc(void)
+{
+    AVSBufferSinkParams *params = av_mallocz(sizeof(AVSBufferSinkParams));
 
     if (!params)
         return NULL;
@@ -306,6 +321,28 @@ static int asink_query_formats(AVFilterContext *ctx)
     return 0;
 }
 
+static int ssink_query_formats(AVFilterContext *ctx)
+{
+    BufferSinkContext *buf = ctx->priv;
+    AVFilterFormats *formats = NULL;
+    unsigned i;
+    int ret;
+
+    CHECK_LIST_SIZE(subtitle_types)
+    if (buf->subtitle_types_size) {
+        for (i = 0; i < NB_ITEMS(buf->subtitle_types); i++)
+            if ((ret = ff_add_subtitle_type(&formats, buf->subtitle_types[i])) < 0)
+                return ret;
+        if ((ret = ff_set_common_formats(ctx, formats)) < 0)
+            return ret;
+    } else {
+        if ((ret = ff_default_query_formats(ctx)) < 0)
+            return ret;
+    }
+
+    return 0;
+}
+
 #define OFFSET(x) offsetof(BufferSinkContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption buffersink_options[] = {
@@ -323,9 +360,16 @@ static const AVOption abuffersink_options[] = {
     { NULL },
 };
 #undef FLAGS
+#define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_SUBTITLE_PARAM
+static const AVOption sbuffersink_options[] = {
+    { "subtitle_types", "set the supported subtitle formats", OFFSET(subtitle_types), AV_OPT_TYPE_BINARY, .flags = FLAGS },
+    { NULL },
+};
+#undef FLAGS
 
 AVFILTER_DEFINE_CLASS(buffersink);
 AVFILTER_DEFINE_CLASS(abuffersink);
+AVFILTER_DEFINE_CLASS(sbuffersink);
 
 static const AVFilterPad avfilter_vsink_buffer_inputs[] = {
     {
@@ -364,5 +408,25 @@ AVFilter ff_asink_abuffer = {
     .query_formats = asink_query_formats,
     .activate      = activate,
     .inputs        = avfilter_asink_abuffer_inputs,
+    .outputs       = NULL,
+};
+
+static const AVFilterPad avfilter_ssink_sbuffer_inputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_SUBTITLE,
+    },
+    { NULL }
+};
+
+const AVFilter ff_ssink_sbuffer = {
+    .name          = "sbuffersink",
+    .description   = NULL_IF_CONFIG_SMALL("Buffer subtitle frames, and make them available to the end of the filter graph."),
+    .priv_class    = &sbuffersink_class,
+    .priv_size     = sizeof(BufferSinkContext),
+    .init          = common_init,
+    .query_formats = ssink_query_formats,
+    .activate      = activate,
+    .inputs        = avfilter_ssink_sbuffer_inputs,
     .outputs       = NULL,
 };
