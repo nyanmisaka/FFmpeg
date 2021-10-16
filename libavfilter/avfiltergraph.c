@@ -331,6 +331,8 @@ static int filter_link_check_formats(void *log, AVFilterLink *link, AVFilterForm
             return ret;
         break;
 
+    case AVMEDIA_TYPE_SUBTITLE:
+        return 0;
     default:
         av_assert0(!"reached");
     }
@@ -464,6 +466,9 @@ static int query_formats(AVFilterGraph *graph, AVClass *log_ctx)
             int convert_needed = 0;
 
             if (!link)
+                continue;
+
+            if (link->type == AVMEDIA_TYPE_SUBTITLE)
                 continue;
 
             if (link->incfg.formats != link->outcfg.formats

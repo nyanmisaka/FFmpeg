@@ -19,6 +19,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavcodec/avcodec.h"
 #include "libavutil/avassert.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/common.h"
@@ -343,6 +344,12 @@ int ff_add_channel_layout(AVFilterChannelLayouts **l, uint64_t channel_layout)
     return 0;
 }
 
+int ff_add_subtitle_type(AVFilterFormats **avff, int64_t fmt)
+{
+    ADD_FORMAT(avff, fmt, ff_formats_unref, int, formats, nb_formats);
+    return 0;
+}
+
 AVFilterFormats *ff_all_formats(enum AVMediaType type)
 {
     AVFilterFormats *ret = NULL;
@@ -360,6 +367,13 @@ AVFilterFormats *ff_all_formats(enum AVMediaType type)
                 return NULL;
             fmt++;
         }
+    } else if (type == AVMEDIA_TYPE_SUBTITLE) {
+        if (ff_add_subtitle_type(&ret, AV_SUBTITLE_FMT_BITMAP) < 0)
+            return NULL;
+        if (ff_add_subtitle_type(&ret, AV_SUBTITLE_FMT_ASS) < 0)
+            return NULL;
+        if (ff_add_subtitle_type(&ret, AV_SUBTITLE_FMT_TEXT) < 0)
+            return NULL;
     }
 
     return ret;
