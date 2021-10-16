@@ -32,6 +32,7 @@
 #include "libavutil/colorspace.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
+#include "libavutil/subfmt.h"
 
 #define RGBA(r,g,b,a) (((unsigned)(a) << 24) | ((r) << 16) | ((g) << 8) | (b))
 #define MAX_EPOCH_PALETTES 8   // Max 8 allowed per PGS epoch

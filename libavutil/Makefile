@@ -73,6 +73,7 @@ HEADERS = adler32.h                                                     \
           sha512.h                                                      \
           spherical.h                                                   \
           stereo3d.h                                                    \
+          subfmt.h                                                      \
           threadmessage.h                                               \
           time.h                                                        \
           timecode.h                                                    \
@@ -157,6 +158,7 @@ OBJS = adler32.o                                                        \
        slicethread.o                                                    \
        spherical.o                                                      \
        stereo3d.o                                                       \
+       subfmt.o                                                         \
        threadmessage.o                                                  \
        time.o                                                           \
        timecode.o                                                       \

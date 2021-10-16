@@ -34,6 +34,7 @@
 #include "rational.h"
 #include "samplefmt.h"
 #include "pixfmt.h"
+#include "subfmt.h"
 #include "version.h"
 
 
@@ -286,7 +287,7 @@ typedef struct AVRegionOfInterest {
 } AVRegionOfInterest;
 
 /**
- * This structure describes decoded (raw) audio or video data.
+ * This structure describes decoded (raw) audio, video or subtitle data.
  *
  * AVFrame must be allocated using av_frame_alloc(). Note that this only
  * allocates the AVFrame itself, the buffers for the data must be managed
@@ -317,6 +318,13 @@ typedef struct AVRegionOfInterest {
  */
 typedef struct AVFrame {
 #define AV_NUM_DATA_POINTERS 8
+    /**
+     * Media type of the frame (audio, video, subtitles..)
+     *
+     * See AVMEDIA_TYPE_xxx
+     */
+    enum AVMediaType type;
+
     /**
      * pointer to the picture/channel planes.
      * This might be different from the first allocated byte
@@ -386,7 +394,7 @@ typedef struct AVFrame {
     /**
      * format of the frame, -1 if unknown or unset
      * Values correspond to enum AVPixelFormat for video frames,
-     * enum AVSampleFormat for audio)
+     * enum AVSampleFormat for audio, AVSubtitleType for subtitles)
      */
     int format;
 
@@ -493,6 +501,39 @@ typedef struct AVFrame {
      * Channel layout of the audio data.
      */
     uint64_t channel_layout;
+
+    /**
+     * Display start time, relative to packet pts, in ms.
+     */
+    uint32_t subtitle_start_time;
+
+    /**
+     * Display end time, relative to packet pts, in ms.
+     */
+    uint32_t subtitle_end_time;
+
+    /**
+     * Number of items in the @ref subtitle_areas array.
+     */
+    unsigned num_subtitle_areas;
+
+    /**
+     * Array of subtitle areas, may be empty.
+     */
+    AVSubtitleArea **subtitle_areas;
+
+    /**
+     * Usually the same as packet pts, in AV_TIME_BASE.
+     *
+     * @deprecated This is kept for compatibility reasons and corresponds to
+     * AVSubtitle->pts. Might be removed in the future.
+     */
+    int64_t subtitle_pts;
+
+    /**
+     * Header containing style information for text subtitles.
+     */
+    AVBufferRef *subtitle_header;
 
     /**
      * AVBuffer references backing the data for this frame. If all elements of
@@ -824,6 +865,8 @@ void av_frame_move_ref(AVFrame *dst, AVFrame *src);
 /**
  * Allocate new buffer(s) for audio or video data.
  *
+ * Note: For subtitle data, use av_frame_get_buffer2
+ *
  * The following fields must be set on frame before calling this function:
  * - format (pixel format for video, sample format for audio)
  * - width and height for video
@@ -843,8 +886,38 @@ void av_frame_move_ref(AVFrame *dst, AVFrame *src);
  *              recommended to pass 0 here unless you know what you are doing.
  *
  * @return 0 on success, a negative AVERROR on error.
+ *
+ * @deprecated Use @ref av_frame_get_buffer2 instead and set @ref AVFrame.type
+ * before calling.
  */
+attribute_deprecated
 int av_frame_get_buffer(AVFrame *frame, int align);
+
+/**
+ * Allocate new buffer(s) for audio, video or subtitle data.
+ *
+ * The following fields must be set on frame before calling this function:
+ * - format (pixel format for video, sample format for audio)
+ * - width and height for video
+ * - nb_samples and channel_layout for audio
+ * - type (AVMediaType)
+ *
+ * This function will fill AVFrame.data and AVFrame.buf arrays and, if
+ * necessary, allocate and fill AVFrame.extended_data and AVFrame.extended_buf.
+ * For planar formats, one buffer will be allocated for each plane.
+ *
+ * @warning: if frame already has been allocated, calling this function will
+ *           leak memory. In addition, undefined behavior can occur in certain
+ *           cases.
+ *
+ * @param frame frame in which to store the new buffers.
+ * @param align Required buffer size alignment. If equal to 0, alignment will be
+ *              chosen automatically for the current CPU. It is highly
+ *              recommended to pass 0 here unless you know what you are doing.
+ *
+ * @return 0 on success, a negative AVERROR on error.
+ */
+int av_frame_get_buffer2(AVFrame *frame, int align);
 
 /**
  * Check if the frame data is writable.
@@ -950,6 +1023,22 @@ AVFrameSideData *av_frame_get_side_data(const AVFrame *frame,
  * Remove and free all side data instances of the given type.
  */
 void av_frame_remove_side_data(AVFrame *frame, enum AVFrameSideDataType type);
+
+/**
+ * Copies subtitle data from AVSubtitle to AVFrame.
+ *
+ * @deprecated This is a compatibility method for interoperability with
+ * the legacy subtitle API.
+ */
+void av_frame_put_subtitle(AVFrame *frame, AVSubtitle *sub);
+
+/**
+ * Copies subtitle data from AVFrame to AVSubtitle.
+ *
+ * @deprecated This is a compatibility method for interoperability with
+* the legacy subtitle API.
+ */
+void av_frame_get_subtitle(AVSubtitle *sub, AVFrame *frame);
 
 
 /**

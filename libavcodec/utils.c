@@ -823,6 +823,17 @@ static int get_audio_frame_duration(enum AVCodecID id, int sr, int ch, int ba,
     return 0;
 }
 
+enum AVSubtitleType av_get_subtitle_format_from_codecdesc(const AVCodecDescriptor *codec_descriptor)
+{
+    if(codec_descriptor->props & AV_CODEC_PROP_BITMAP_SUB)
+        return AV_SUBTITLE_FMT_BITMAP;
+
+    if(codec_descriptor->props & AV_CODEC_PROP_TEXT_SUB)
+        return AV_SUBTITLE_FMT_ASS;
+
+    return AV_SUBTITLE_FMT_UNKNOWN;
+}
+
 int av_get_audio_frame_duration(AVCodecContext *avctx, int frame_bytes)
 {
     return get_audio_frame_duration(avctx->codec_id, avctx->sample_rate,
