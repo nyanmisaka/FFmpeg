@@ -338,6 +338,7 @@ extern AVFilter ff_vf_overlay_opencl;
 extern AVFilter ff_vf_overlay_qsv;
 extern AVFilter ff_vf_overlay_vulkan;
 extern AVFilter ff_vf_overlay_cuda;
+extern AVFilter ff_vf_overlaygraphicsubs;
 extern AVFilter ff_vf_owdenoise;
 extern AVFilter ff_vf_pad;
 extern AVFilter ff_vf_pad_opencl;
@@ -515,6 +516,7 @@ extern AVFilter ff_avf_showvolume;
 extern AVFilter ff_avf_showwaves;
 extern AVFilter ff_avf_showwavespic;
 extern AVFilter ff_vaf_spectrumsynth;
+extern AVFilter ff_svf_graphicsub2video;
 
 /* multimedia sources */
 extern AVFilter ff_avsrc_amovie;
