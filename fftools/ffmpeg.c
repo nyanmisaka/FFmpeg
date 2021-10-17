@@ -196,8 +196,9 @@ static void sub2video_copy_rect(uint8_t *dst, int dst_linesize, int w, int h,
     uint8_t *src, *src2;
     int x, y;
 
+    // The sub2video hack is designed for graphical(bitmap) subtitles.
+    // Return when SUBTITLE_TYPE is ASS/TEXT to leave a dummy frame source for libass.
     if (r->type != SUBTITLE_BITMAP) {
-        av_log(NULL, AV_LOG_WARNING, "sub2video: non-bitmap subtitle\n");
         return;
     }
     if (r->x < 0 || r->x + r->w > w || r->y < 0 || r->y + r->h > h) {
