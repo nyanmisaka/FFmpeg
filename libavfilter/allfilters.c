@@ -475,6 +475,7 @@ extern AVFilter ff_vf_zscale;
 
 extern AVFilter ff_vsrc_allrgb;
 extern AVFilter ff_vsrc_allyuv;
+extern AVFilter ff_vsrc_alphasrc;
 extern AVFilter ff_vsrc_cellauto;
 extern AVFilter ff_vsrc_color;
 extern AVFilter ff_vsrc_coreimagesrc;
