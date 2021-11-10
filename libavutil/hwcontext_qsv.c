@@ -47,6 +47,7 @@
 #include "pixfmt.h"
 #include "pixdesc.h"
 #include "time.h"
+#include "imgutils.h"
 
 #define QSV_VERSION_ATLEAST(MAJOR, MINOR)   \
     (MFX_VERSION_MAJOR > (MAJOR) ||         \
@@ -90,6 +91,7 @@ typedef struct QSVFramesContext {
 
     mfxExtOpaqueSurfaceAlloc opaque_alloc;
     mfxExtBuffer *ext_buffers[1];
+    AVFrame realigned_tmp_frame;
 } QSVFramesContext;
 
 static const struct {
@@ -142,6 +144,59 @@ static uint32_t qsv_get_d3d11va_bind_flags(int mem_type)
     return bind_flags;
 }
 #endif
+
+static int qsv_fill_border(AVFrame *dst, const AVFrame *src)
+{
+    const AVPixFmtDescriptor *desc;
+    int i, planes_nb = 0;
+    if (dst->format != src->format)
+        return AVERROR(EINVAL);
+
+    desc = av_pix_fmt_desc_get(dst->format);
+
+    for (i = 0; i < desc->nb_components; i++)
+        planes_nb = FFMAX(planes_nb, desc->comp[i].plane + 1);
+
+    for (i = 0; i < planes_nb; i++) {
+        int sheight, dheight, x, y;
+        ptrdiff_t swidth = av_image_get_linesize(src->format,
+                                                 src->width,
+                                                 i);
+        ptrdiff_t dwidth = av_image_get_linesize(dst->format,
+                                                 dst->width,
+                                                 i);
+        const AVComponentDescriptor comp = desc->comp[i];
+        if (swidth < 0 || dwidth < 0) {
+            av_log(NULL, AV_LOG_ERROR, "av_image_get_linesize failed\n");
+            return AVERROR(EINVAL);
+        }
+        sheight = src->height;
+        dheight = dst->height;
+        if (i == 1 || i == 2) {
+            sheight = AV_CEIL_RSHIFT(src->height, desc->log2_chroma_h);
+            dheight = AV_CEIL_RSHIFT(dst->height, desc->log2_chroma_h);
+        }
+        //fill right padding
+        for (y = 0; y < sheight; y++) {
+            void *line_ptr = dst->data + y*dst->linesize[i];
+            uint8_t *line_ptr8 = line_ptr;
+            uint16_t *line_ptr16 = line_ptr;
+            for (x = src->width; x < dst->width; x++) {
+                if (comp.depth > 8)
+                    line_ptr16[x] = line_ptr16[src->width-1];
+                else
+                    line_ptr8[x]  = line_ptr8[src->width-1];
+            }
+        }
+        //fill bottom padding
+        for (y = sheight; y < dheight; y++) {
+            memcpy(dst->data[i]+y*dst->linesize[i],
+                   dst->data[i]+(sheight-1)*dst->linesize[i],
+                   dwidth);
+        }
+    }
+    return 0;
+}
 
 static int qsv_device_init(AVHWDeviceContext *ctx)
 {
@@ -226,6 +281,7 @@ static void qsv_frames_uninit(AVHWFramesContext *ctx)
     av_freep(&s->surface_ptrs);
     av_freep(&s->surfaces_internal);
     av_freep(&s->handle_pairs_internal);
+    av_frame_unref(&s->realigned_tmp_frame);
     av_buffer_unref(&s->child_frames_ref);
 }
 
@@ -1036,7 +1092,7 @@ static int qsv_transfer_data_to(AVHWFramesContext *ctx, AVFrame *dst,
     mfxStatus err;
     int ret = 0;
     /* make a copy if the input is not padded as libmfx requires */
-    AVFrame tmp_frame;
+    AVFrame *tmp_frame = &s->realigned_tmp_frame;
     const AVFrame *src_frame;
     int realigned = 0;
 
@@ -1067,22 +1123,31 @@ static int qsv_transfer_data_to(AVHWFramesContext *ctx, AVFrame *dst,
 
     if (src->height & 15 || src->linesize[0] & 15) {
         realigned = 1;
-        memset(&tmp_frame, 0, sizeof(tmp_frame));
-        tmp_frame.format         = src->format;
-        tmp_frame.width          = FFALIGN(src->width, 16);
-        tmp_frame.height         = FFALIGN(src->height, 16);
-        ret = av_frame_get_buffer(&tmp_frame, 0);
-        if (ret < 0)
-            return ret;
+        if (tmp_frame->format != src->format ||
+            tmp_frame->width  != FFALIGN(src->width, 16) ||
+            tmp_frame->height != FFALIGN(src->height, 16)) {
+            av_frame_unref(tmp_frame);
 
-        ret = av_frame_copy(&tmp_frame, src);
+            tmp_frame->format = src->format;
+            tmp_frame->width  = FFALIGN(src->width, 16);
+            tmp_frame->height = FFALIGN(src->height, 16);
+            ret = av_frame_get_buffer(tmp_frame, 0);
+            if (ret < 0)
+                return ret;
+        }
+        ret = av_frame_copy(tmp_frame, src);
         if (ret < 0) {
-            av_frame_unref(&tmp_frame);
+            av_frame_unref(tmp_frame);
+            return ret;
+        }
+        ret = qsv_fill_border(tmp_frame, src);
+        if (ret < 0) {
+            av_frame_unref(tmp_frame);
             return ret;
         }
     }
 
-    src_frame = realigned ? &tmp_frame : src;
+    src_frame = realigned ? tmp_frame : src;
 
     if (!s->session_upload) {
         if (s->child_frames_ref)
@@ -1113,9 +1178,6 @@ static int qsv_transfer_data_to(AVHWFramesContext *ctx, AVFrame *dst,
         av_log(ctx, AV_LOG_ERROR, "Error synchronizing the operation\n");
         return AVERROR_UNKNOWN;
     }
-
-    if (realigned)
-        av_frame_unref(&tmp_frame);
 
     return 0;
 }
