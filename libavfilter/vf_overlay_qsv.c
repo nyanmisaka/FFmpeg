@@ -281,14 +281,6 @@ static int config_output(AVFilterLink *outlink)
         (in0->format != AV_PIX_FMT_QSV && in1->format == AV_PIX_FMT_QSV)) {
         av_log(ctx, AV_LOG_ERROR, "Mixing hardware and software pixel formats is not supported.\n");
         return AVERROR(EINVAL);
-    } else if (in0->format == AV_PIX_FMT_QSV) {
-        AVHWFramesContext *hw_frame0 = (AVHWFramesContext *)in0->hw_frames_ctx->data;
-        AVHWFramesContext *hw_frame1 = (AVHWFramesContext *)in1->hw_frames_ctx->data;
-
-        if (hw_frame0->device_ctx != hw_frame1->device_ctx) {
-            av_log(ctx, AV_LOG_ERROR, "Inputs with different underlying QSV devices are forbidden.\n");
-            return AVERROR(EINVAL);
-        }
     }
 
     outlink->w          = vpp->var_values[VAR_MW];
