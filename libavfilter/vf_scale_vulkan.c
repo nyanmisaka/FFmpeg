@@ -83,7 +83,7 @@ static const char write_nv12[] = {
     C(0, void write_nv12(vec4 src, ivec2 pos)                                   )
     C(0, {                                                                      )
     C(1,     imageStore(output_img[0], pos, vec4(src.r, 0.0, 0.0, 0.0));        )
-    //C(1,     pos /= ivec2(2);                                                   )
+    C(1,     pos /= ivec2(2);                                                   )
     C(1,     imageStore(output_img[1], pos, vec4(src.g, src.b, 0.0, 0.0));      )
     C(0, }                                                                      )
 };
@@ -92,7 +92,7 @@ static const char write_420[] = {
     C(0, void write_420(vec4 src, ivec2 pos)                                    )
     C(0, {                                                                      )
     C(1,     imageStore(output_img[0], pos, vec4(src.r, 0.0, 0.0, 0.0));        )
-    //C(1,     pos /= ivec2(2);                                                   )
+    C(1,     pos /= ivec2(2);                                                   )
     C(1,     imageStore(output_img[1], pos, vec4(src.g, 0.0, 0.0, 0.0));        )
     C(1,     imageStore(output_img[2], pos, vec4(src.b, 0.0, 0.0, 0.0));        )
     C(0, }                                                                      )
@@ -222,10 +222,40 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
                 GLSLC(1, }                                                       );
             }
         } else {
-            GLSLC(1, vec4 res = scale_bilinear(0, pos, c_r, c_o);                );
+            GLSLC(1, vec4 res;                                                   );
 
             if (ff_vk_mt_is_np_rgb(s->vkctx.input_format)) {
+                GLSLC(1, res = scale_bilinear(0, pos, c_r, c_o);                 );
                 GLSLF(1, res = rgb2yuv(res, %i);    ,s->out_range == AVCOL_RANGE_JPEG);
+            } else {
+                switch (s->vkctx.input_format) {
+                case AV_PIX_FMT_NV12:
+                case AV_PIX_FMT_P010:
+                    GLSLC(1, vec4 res0 = scale_bilinear(0, pos, c_r, c_o);       );
+                    GLSLC(1, res = vec4(res0.r, 0.0, 0.0, 0.0);                  );
+                    GLSLC(1, if (IS_WITHIN(pos, size)) {                         );
+                    GLSLC(1,     vec4 res1 = scale_bilinear(1, pos, c_r, c_o);   );
+                    GLSLC(1,     res = vec4(res0.r, res1.g, res1.b, 0.0);        );
+                    GLSLC(1, }                                                   );
+                    break;
+                case AV_PIX_FMT_YUV420P:
+                case AV_PIX_FMT_YUV420P10:
+                    GLSLC(1, vec4 res0 = scale_bilinear(0, pos, c_r, c_o);       );
+                    GLSLC(1, res = vec4(res0.r, 0.0, 0.0, 0.0);                  );
+                    GLSLC(1, if (IS_WITHIN(pos, size)) {                         );
+                    GLSLC(1,     vec4 res1 = scale_bilinear(1, pos, c_r, c_o);   );
+                    GLSLC(1,     vec4 res2 = scale_bilinear(2, pos, c_r, c_o);   );
+                    GLSLC(1,     res = vec4(res0.r, res1.g, res2.b, 0.0);        );
+                    GLSLC(1, }                                                   );
+                    break;
+                case AV_PIX_FMT_YUV444P:
+                    GLSLC(1, vec4 res0 = scale_bilinear(0, pos, c_r, c_o);       );
+                    GLSLC(1, vec4 res1 = scale_bilinear(1, pos, c_r, c_o);       );
+                    GLSLC(1, vec4 res2 = scale_bilinear(2, pos, c_r, c_o);       );
+                    GLSLC(1, res = vec4(res0.r, res1.g, res2.b, 0.0);            );
+                    break;
+                default: return AVERROR(EINVAL);
+                }
             }
 
             switch (s->vkctx.output_format) {
