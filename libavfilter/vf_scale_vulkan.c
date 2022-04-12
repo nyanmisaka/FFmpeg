@@ -83,7 +83,7 @@ static const char write_nv12[] = {
     C(0, void write_nv12(vec4 src, ivec2 pos)                                   )
     C(0, {                                                                      )
     C(1,     imageStore(output_img[0], pos, vec4(src.r, 0.0, 0.0, 0.0));        )
-    C(1,     pos /= ivec2(2);                                                   )
+    //C(1,     pos /= ivec2(2);                                                   )
     C(1,     imageStore(output_img[1], pos, vec4(src.g, src.b, 0.0, 0.0));      )
     C(0, }                                                                      )
 };
@@ -92,7 +92,7 @@ static const char write_420[] = {
     C(0, void write_420(vec4 src, ivec2 pos)                                    )
     C(0, {                                                                      )
     C(1,     imageStore(output_img[0], pos, vec4(src.r, 0.0, 0.0, 0.0));        )
-    C(1,     pos /= ivec2(2);                                                   )
+    //C(1,     pos /= ivec2(2);                                                   )
     C(1,     imageStore(output_img[1], pos, vec4(src.g, 0.0, 0.0, 0.0));        )
     C(1,     imageStore(output_img[2], pos, vec4(src.b, 0.0, 0.0, 0.0));        )
     C(0, }                                                                      )
