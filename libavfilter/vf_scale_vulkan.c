@@ -233,6 +233,7 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
                 case AV_PIX_FMT_P010:
                     GLSLC(1, vec4 res0 = scale_bilinear(0, pos, c_r, c_o);       );
                     GLSLC(1, res = vec4(res0.r, 0.0, 0.0, 0.0);                  );
+                    GLSLF(1, size = imageSize(output_img[1]);                  ,i);
                     GLSLC(1, if (IS_WITHIN(pos, size)) {                         );
                     GLSLC(1,     vec4 res1 = scale_bilinear(1, pos, c_r, c_o);   );
                     GLSLC(1,     res = vec4(res0.r, res1.g, res1.b, 0.0);        );
@@ -242,6 +243,7 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
                 case AV_PIX_FMT_YUV420P10:
                     GLSLC(1, vec4 res0 = scale_bilinear(0, pos, c_r, c_o);       );
                     GLSLC(1, res = vec4(res0.r, 0.0, 0.0, 0.0);                  );
+                    GLSLF(1, size = imageSize(output_img[1]);                  ,i);
                     GLSLC(1, if (IS_WITHIN(pos, size)) {                         );
                     GLSLC(1,     vec4 res1 = scale_bilinear(1, pos, c_r, c_o);   );
                     GLSLC(1,     vec4 res2 = scale_bilinear(2, pos, c_r, c_o);   );
