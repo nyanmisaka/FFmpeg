@@ -186,7 +186,7 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
 
         GLSLD(   scale_bilinear                                                  );
 
-        if (s->vkctx.output_format != s->vkctx.input_format) {
+        if (ff_vk_mt_is_np_rgb(s->vkctx.input_format) && s->vkctx.output_format != s->vkctx.input_format) {
             GLSLD(   rgb2yuv                                                     );
         }
 
@@ -223,7 +223,11 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
             }
         } else {
             GLSLC(1, vec4 res = scale_bilinear(0, pos, c_r, c_o);                );
-            GLSLF(1, res = rgb2yuv(res, %i);    ,s->out_range == AVCOL_RANGE_JPEG);
+
+            if (ff_vk_mt_is_np_rgb(s->vkctx.input_format)) {
+                GLSLF(1, res = rgb2yuv(res, %i);    ,s->out_range == AVCOL_RANGE_JPEG);
+            }
+
             switch (s->vkctx.output_format) {
             case AV_PIX_FMT_NV12:
             case AV_PIX_FMT_P010:      GLSLC(1, write_nv12(res, pos); ); break;
@@ -242,7 +246,7 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
     RET(ff_vk_init_pipeline_layout(vkctx, s->pl));
     RET(ff_vk_init_compute_pipeline(vkctx, s->pl));
 
-    if (s->vkctx.output_format != s->vkctx.input_format) {
+    if (ff_vk_mt_is_np_rgb(s->vkctx.input_format) && s->vkctx.output_format != s->vkctx.input_format) {
         const struct LumaCoefficients *lcoeffs;
         double tmp_mat[3][3];
 
@@ -420,7 +424,7 @@ static int scale_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
 
     if (s->out_range != AVCOL_RANGE_UNSPECIFIED)
         out->color_range = s->out_range;
-    if (s->vkctx.output_format != s->vkctx.input_format)
+    if (ff_vk_mt_is_np_rgb(s->vkctx.input_format) && s->vkctx.output_format != s->vkctx.input_format)
         out->chroma_location = AVCHROMA_LOC_TOPLEFT;
 
     av_frame_free(&in);
@@ -458,10 +462,6 @@ static int scale_vulkan_config_output(AVFilterLink *outlink)
     }
 
     if (s->vkctx.output_format != s->vkctx.input_format) {
-        if (!ff_vk_mt_is_np_rgb(s->vkctx.input_format)) {
-            av_log(avctx, AV_LOG_ERROR, "Unsupported input format for conversion\n");
-            return AVERROR(EINVAL);
-        }
         if (s->vkctx.output_format != AV_PIX_FMT_NV12 &&
             s->vkctx.output_format != AV_PIX_FMT_P010 &&
             s->vkctx.output_format != AV_PIX_FMT_YUV420P &&
