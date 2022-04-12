@@ -191,9 +191,11 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
         }
 
         switch (s->vkctx.output_format) {
-        case AV_PIX_FMT_NV12:    GLSLD(write_nv12); break;
-        case AV_PIX_FMT_YUV420P: GLSLD( write_420); break;
-        case AV_PIX_FMT_YUV444P: GLSLD( write_444); break;
+        case AV_PIX_FMT_NV12:
+        case AV_PIX_FMT_P010:      GLSLD(write_nv12); break;
+        case AV_PIX_FMT_YUV420P:
+        case AV_PIX_FMT_YUV420P10: GLSLD( write_420); break;
+        case AV_PIX_FMT_YUV444P:   GLSLD( write_444); break;
         default: break;
         }
 
@@ -223,9 +225,11 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
             GLSLC(1, vec4 res = scale_bilinear(0, pos, c_r, c_o);                );
             GLSLF(1, res = rgb2yuv(res, %i);    ,s->out_range == AVCOL_RANGE_JPEG);
             switch (s->vkctx.output_format) {
-            case AV_PIX_FMT_NV12:    GLSLC(1, write_nv12(res, pos); ); break;
-            case AV_PIX_FMT_YUV420P: GLSLC(1,  write_420(res, pos); ); break;
-            case AV_PIX_FMT_YUV444P: GLSLC(1,  write_444(res, pos); ); break;
+            case AV_PIX_FMT_NV12:
+            case AV_PIX_FMT_P010:      GLSLC(1, write_nv12(res, pos); ); break;
+            case AV_PIX_FMT_YUV420P:
+            case AV_PIX_FMT_YUV420P10: GLSLC(1,  write_420(res, pos); ); break;
+            case AV_PIX_FMT_YUV444P:   GLSLC(1,  write_444(res, pos); ); break;
             default: return AVERROR(EINVAL);
             }
         }
@@ -459,7 +463,9 @@ static int scale_vulkan_config_output(AVFilterLink *outlink)
             return AVERROR(EINVAL);
         }
         if (s->vkctx.output_format != AV_PIX_FMT_NV12 &&
+            s->vkctx.output_format != AV_PIX_FMT_P010 &&
             s->vkctx.output_format != AV_PIX_FMT_YUV420P &&
+            s->vkctx.output_format != AV_PIX_FMT_YUV420P10 &&
             s->vkctx.output_format != AV_PIX_FMT_YUV444P) {
             av_log(avctx, AV_LOG_ERROR, "Unsupported output format\n");
             return AVERROR(EINVAL);
