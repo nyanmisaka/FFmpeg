@@ -80,19 +80,19 @@ static const char rgb2yuv[] = {
 };
 
 static const char write_nv12[] = {
-    C(0, void write_nv12(vec4 src, ivec2 pos)                                   )
+    C(0, void write_nv12(vec4 src, ivec2 pos, int pos_offset)                   )
     C(0, {                                                                      )
     C(1,     imageStore(output_img[0], pos, vec4(src.r, 0.0, 0.0, 0.0));        )
-    C(1,     pos /= ivec2(2);                                                   )
+    C(1,     pos /= ivec2(pos_offset);                                          )
     C(1,     imageStore(output_img[1], pos, vec4(src.g, src.b, 0.0, 0.0));      )
     C(0, }                                                                      )
 };
 
 static const char write_420[] = {
-    C(0, void write_420(vec4 src, ivec2 pos)                                    )
+    C(0, void write_420(vec4 src, ivec2 pos, int pos_offset)                    )
     C(0, {                                                                      )
     C(1,     imageStore(output_img[0], pos, vec4(src.r, 0.0, 0.0, 0.0));        )
-    C(1,     pos /= ivec2(2);                                                   )
+    C(1,     pos /= ivec2(pos_offset);                                          )
     C(1,     imageStore(output_img[1], pos, vec4(src.g, 0.0, 0.0, 0.0));        )
     C(1,     imageStore(output_img[2], pos, vec4(src.b, 0.0, 0.0, 0.0));        )
     C(0, }                                                                      )
@@ -222,9 +222,11 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
                 GLSLC(1, }                                                       );
             }
         } else {
+            GLSLC(1, int pos_offset = 0;                                         );
             GLSLC(1, vec4 res;                                                   );
 
             if (ff_vk_mt_is_np_rgb(s->vkctx.input_format)) {
+                GLSLC(1, pos_offset = 2;                                         );
                 GLSLC(1, res = scale_bilinear(0, pos, c_r, c_o);                 );
                 GLSLF(1, res = rgb2yuv(res, %i);    ,s->out_range == AVCOL_RANGE_JPEG);
             } else {
@@ -262,9 +264,9 @@ static av_cold int init_filter(AVFilterContext *ctx, AVFrame *in)
 
             switch (s->vkctx.output_format) {
             case AV_PIX_FMT_NV12:
-            case AV_PIX_FMT_P010:      GLSLC(1, write_nv12(res, pos); ); break;
+            case AV_PIX_FMT_P010:      GLSLC(1, write_nv12(res, pos, pos_offset); ); break;
             case AV_PIX_FMT_YUV420P:
-            case AV_PIX_FMT_YUV420P10: GLSLC(1,  write_420(res, pos); ); break;
+            case AV_PIX_FMT_YUV420P10: GLSLC(1,  write_420(res, pos, pos_offset); ); break;
             case AV_PIX_FMT_YUV444P:   GLSLC(1,  write_444(res, pos); ); break;
             default: return AVERROR(EINVAL);
             }
