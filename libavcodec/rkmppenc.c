@@ -114,7 +114,7 @@ static int rkmpp_preg_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
     prep_cfg->height        = avctx->height;
     prep_cfg->hor_stride    = avctx->width;
     prep_cfg->ver_stride    = avctx->height;
-    prep_cfg->format        = rkmpp_get_mppformat(avctx->sw_pix_fmt);
+    prep_cfg->format        = rkmpp_get_mppformat(AV_PIX_FMT_YUV420P);
     prep_cfg->rotation      = MPP_ENC_ROT_0;
 
     ret = encoder->mpi->control(encoder->ctx, MPP_ENC_SET_PREP_CFG, prep_cfg);

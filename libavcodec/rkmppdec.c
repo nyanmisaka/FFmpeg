@@ -523,15 +523,16 @@ static int rkmpp_get_frame(AVCodecContext *avctx, AVFrame *frame, int timeout)
 
     rkmpp_update_fps(avctx);
 
+/*
     if (avctx->pix_fmt != AV_PIX_FMT_DRM_PRIME) {
         av_log(avctx, AV_LOG_DEBUG, "Not drm prime.\n");
         ret = ff_get_buffer(avctx, frame, 0);
         if (ret < 0)
             goto out;
     }
-
+*/
     // setup general frame fields
-    frame->format           = avctx->pix_fmt;
+    frame->format           = AV_PIX_FMT_DRM_PRIME;
     frame->width            = mpp_frame_get_width(mppframe);
     frame->height           = mpp_frame_get_height(mppframe);
     frame->pts              = mpp_frame_get_pts(mppframe);
@@ -550,10 +551,12 @@ static int rkmpp_get_frame(AVCodecContext *avctx, AVFrame *frame, int timeout)
     frame->interlaced_frame = ((mode & MPP_FRAME_FLAG_FIELD_ORDER_MASK) == MPP_FRAME_FLAG_DEINTERLACED);
     frame->top_field_first  = ((mode & MPP_FRAME_FLAG_FIELD_ORDER_MASK) == MPP_FRAME_FLAG_TOP_FIRST);
 
+/*
     if (avctx->pix_fmt != AV_PIX_FMT_DRM_PRIME) {
         ret = rkmpp_convert_frame(avctx, frame, mppframe, buffer);
         goto out;
     }
+*/
 
     mppformat = mpp_frame_get_fmt(mppframe);
     drmformat = rkmpp_get_frameformat(mppformat);
@@ -785,7 +788,7 @@ static const AVCodecHWConfigInternal *const rkmpp_hw_configs[] = {
         .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
         .caps_internal  = FF_CODEC_CAP_CONTIGUOUS_BUFFERS, \
         .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, \
-                                                         AV_PIX_FMT_YUV420P, \
+/*                                                         AV_PIX_FMT_YUV420P, */\
                                                          AV_PIX_FMT_NONE}, \
         .hw_configs     = rkmpp_hw_configs, \
         .bsfs           = BSFS, \
