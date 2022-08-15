@@ -524,6 +524,7 @@ static int rkmpp_get_frame(AVCodecContext *avctx, AVFrame *frame, int timeout)
     rkmpp_update_fps(avctx);
 
     if (avctx->pix_fmt != AV_PIX_FMT_DRM_PRIME) {
+        av_log(avctx, AV_LOG_DEBUG, "Not drm prime.\n");
         ret = ff_get_buffer(avctx, frame, 0);
         if (ret < 0)
             goto out;
