@@ -248,7 +248,7 @@ static int rkmpp_init_decoder(AVCodecContext *avctx)
         goto fail;
     }
 
-    ret = mpp_buffer_group_get_internal(&decoder->frame_group, MPP_BUFFER_TYPE_ION);
+    ret = mpp_buffer_group_get_internal(&decoder->frame_group, MPP_BUFFER_TYPE_DRM);
     if (ret) {
        av_log(avctx, AV_LOG_ERROR, "Failed to get buffer group (code = %d)\n", ret);
        ret = AVERROR_UNKNOWN;
