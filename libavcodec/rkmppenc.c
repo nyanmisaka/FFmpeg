@@ -131,21 +131,36 @@ static int rkmpp_preg_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
 static int rkmpp_rc_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
                            MppEncRcCfg *rc_cfg)
 {
-    int ret;
-    int fps;
+    int ret; 
 
     memset(rc_cfg, 0, sizeof(*rc_cfg));
     rc_cfg->change  = MPP_ENC_RC_CFG_CHANGE_ALL;
     // TODO: set by AVOption
-    rc_cfg->rc_mode = MPP_ENC_RC_MODE_CBR;
+    rc_cfg->rc_mode = MPP_ENC_RC_MODE_VBR;
     rc_cfg->quality = MPP_ENC_RC_QUALITY_MEDIUM;
+    if (avctx->flags & AV_CODEC_FLAG_QSCALE)
+        rc_cfg->rc_mode = MPP_ENC_RC_MODE_FIXQP;
+    else if (avctx->bit_rate > 0 && avctx->rc_max_rate == avctx->bit_rate)
+        rc_cfg->rc_mode = MPP_ENC_RC_MODE_CBR;
+    else if (avctx->bit_rate > 0)
+        rc_cfg->rc_mode = MPP_ENC_RC_MODE_AVBR;
+
+    rc_cfg->bps_target  = avctx->bit_rate;
 
     if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_CBR) {
         /* constant bitrate has very small bps range of 1/16 bps */
-        rc_cfg->bps_target  = avctx->bit_rate;
         rc_cfg->bps_max     = avctx->bit_rate * 17 / 16;
         rc_cfg->bps_min     = avctx->bit_rate * 15 / 16;
-    } else if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_VBR) {
+    } else if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_FIXQP) {
+        rc_cfg->qp_init = 10 + avctx->global_quality / (FF_QP2LAMBDA << 2);
+        if (rc_cfg->qp_init > 40)
+            rc_cfg->qp_init = 40;
+        rc_cfg->qp_max      = rc_cfg->qp_init;
+        rc_cfg->qp_min      = rc_cfg->qp_init;
+        rc_cfg->qp_max_i    = rc_cfg->qp_init;
+        rc_cfg->qp_min_i    = rc_cfg->qp_init;
+        rc_cfg->qp_delta_ip = 0;
+    } else if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_VBR || rc_cfg->rc_mode == MPP_ENC_RC_MODE_AVBR) {
         if (rc_cfg->quality == MPP_ENC_RC_QUALITY_CQP) {
             /* constant QP does not have bps */
             rc_cfg->bps_target  = -1;
@@ -153,20 +168,29 @@ static int rkmpp_rc_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
             rc_cfg->bps_min     = -1;
         } else {
             /* variable bitrate has large bps range */
-            rc_cfg->bps_target  = avctx->bit_rate;
             rc_cfg->bps_max     = avctx->bit_rate * 17 / 16;
             rc_cfg->bps_min     = avctx->bit_rate * 1 / 16;
+            rc_cfg->qp_init     = -1;
+            rc_cfg->qp_max      = 51;
+            rc_cfg->qp_min      = 10;
+            rc_cfg->qp_max_i    = 51;
+            rc_cfg->qp_min_i    = 10;
+            rc_cfg->qp_delta_ip = 2;
         }
     }
 
-    fps = avctx->time_base.den / avctx->time_base.num;
     /* fix input / output frame rate */
     rc_cfg->fps_in_flex     = 0;
-    rc_cfg->fps_in_num      = fps;
-    rc_cfg->fps_in_denorm   = 1;
+    av_reduce(&rc_cfg->fps_in_num, &rc_cfg->fps_in_denorm,
+                avctx->time_base.den, avctx->time_base.num, 65535);
+
     rc_cfg->fps_out_flex    = 0;
-    rc_cfg->fps_out_num     = fps;
-    rc_cfg->fps_out_denorm  = 1;
+    if (avctx->framerate.num > 0 && avctx->framerate.den > 0)
+        av_reduce(&rc_cfg->fps_out_num, &rc_cfg->fps_out_denorm,
+                  avctx->framerate.num, avctx->framerate.den, 65535);
+    else
+        av_reduce(&rc_cfg->fps_out_num, &rc_cfg->fps_out_denorm,
+                  avctx->time_base.den, avctx->time_base.num, 65535);
 
     rc_cfg->gop             = avctx->gop_size;
     rc_cfg->skip_cnt        = 0;
