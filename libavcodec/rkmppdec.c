@@ -192,7 +192,7 @@ static int rkmpp_init_decoder(AVCodecContext *avctx)
     char *env;
     int ret;
 
-    avctx->pix_fmt = ff_get_format(avctx, avctx->codec->pix_fmts);
+    // avctx->pix_fmt = ff_get_format(avctx, avctx->codec->pix_fmts);
 
     // create a decoder and a ref to it
     decoder = av_mallocz(sizeof(RKMPPDecoder));

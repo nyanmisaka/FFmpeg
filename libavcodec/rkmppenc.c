@@ -42,6 +42,8 @@
 #define SEND_FRAME_TIMEOUT          100
 #define RECEIVE_PACKET_TIMEOUT      100
 
+#define MPP_ALIGN(x, a)         (((x)+(a)-1)&~((a)-1))
+
 typedef struct {
     MppCtx ctx;
     MppApi *mpi;
@@ -112,9 +114,9 @@ static int rkmpp_preg_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
                               MPP_ENC_PREP_CFG_CHANGE_FORMAT;
     prep_cfg->width         = avctx->width;
     prep_cfg->height        = avctx->height;
-    prep_cfg->hor_stride    = avctx->width;
-    prep_cfg->ver_stride    = avctx->height;
-    prep_cfg->format        = rkmpp_get_mppformat(AV_PIX_FMT_YUV420P);
+    prep_cfg->hor_stride    = MPP_ALIGN(avctx->width, 16);
+    prep_cfg->ver_stride    = MPP_ALIGN(avctx->height, 16);
+    prep_cfg->format        = rkmpp_get_mppformat(((AVHWFramesContext *)avctx->hw_frames_ctx->data)->sw_format);
     prep_cfg->rotation      = MPP_ENC_ROT_0;
 
     ret = encoder->mpi->control(encoder->ctx, MPP_ENC_SET_PREP_CFG, prep_cfg);
@@ -286,6 +288,13 @@ static int rkmpp_init_encoder(AVCodecContext *avctx)
     RK_S64 paramS64;
     MppEncSeiMode sei_mode;
     MppPacket packet = NULL;
+
+    if (!avctx->hw_frames_ctx) {
+        av_log(avctx, AV_LOG_ERROR, "A hardware frames reference is "
+               "required to associate the encoding device.\n");
+        ret = AVERROR(EINVAL);
+        goto fail;
+    }
 
     rk_context = avctx->priv_data;
     rk_context->encoder_ref = NULL;
@@ -659,7 +668,7 @@ static int rkmpp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 }
 
 static const AVCodecHWConfigInternal *rkmpp_hw_configs[] = {
-    HW_CONFIG_INTERNAL(DRM_PRIME),
+    HW_CONFIG_ENCODER_FRAMES(DRM_PRIME, DRM),
     NULL
 };
 
