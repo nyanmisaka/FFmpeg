@@ -43,6 +43,7 @@
 #define RECEIVE_PACKET_TIMEOUT      100
 
 #define MPP_ALIGN(x, a)         (((x)+(a)-1)&~((a)-1))
+#define SZ_1K                   (1024)
 
 typedef struct {
     MppCtx ctx;
@@ -147,29 +148,34 @@ static int rkmpp_rc_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
 
     rc_cfg->bps_target  = avctx->bit_rate;
 
-    if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_CBR) {
-        /* constant bitrate has very small bps range of 1/16 bps */
-        rc_cfg->bps_max     = avctx->bit_rate * 17 / 16;
-        rc_cfg->bps_min     = avctx->bit_rate * 15 / 16;
-    } else if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_FIXQP) {
+    if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_FIXQP) {
         rc_cfg->qp_init = 10 + avctx->global_quality / (FF_QP2LAMBDA << 2);
         if (rc_cfg->qp_init > 40)
             rc_cfg->qp_init = 40;
+        av_log(avctx, AV_LOG_VERBOSE, "FIXQP %d => %d.\n", avctx->global_quality, rc_cfg->qp_init);
         rc_cfg->qp_max      = rc_cfg->qp_init;
         rc_cfg->qp_min      = rc_cfg->qp_init;
         rc_cfg->qp_max_i    = rc_cfg->qp_init;
         rc_cfg->qp_min_i    = rc_cfg->qp_init;
         rc_cfg->qp_delta_ip = 0;
-    } else if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_VBR || rc_cfg->rc_mode == MPP_ENC_RC_MODE_AVBR) {
-        if (rc_cfg->quality == MPP_ENC_RC_QUALITY_CQP) {
+    } else {
+        if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_VBR && rc_cfg->quality == MPP_ENC_RC_QUALITY_CQP) {
             /* constant QP does not have bps */
             rc_cfg->bps_target  = -1;
             rc_cfg->bps_max     = -1;
             rc_cfg->bps_min     = -1;
         } else {
-            /* variable bitrate has large bps range */
-            rc_cfg->bps_max     = avctx->bit_rate * 17 / 16;
-            rc_cfg->bps_min     = avctx->bit_rate * 1 / 16;
+            if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_CBR) {
+                av_log(avctx, AV_LOG_VERBOSE, "CBR %d bps.\n", rc_cfg->bps_target);
+                /* constant bitrate has very small bps range of 1/16 bps */
+                rc_cfg->bps_max     = avctx->bit_rate * 17 / 16;
+                rc_cfg->bps_min     = avctx->bit_rate * 15 / 16;
+            } else {
+                av_log(avctx, AV_LOG_VERBOSE, "(A)VBR %d bps.\n", rc_cfg->bps_target);
+                /* variable bitrate has large bps range */
+                rc_cfg->bps_max     = avctx->bit_rate * 17 / 16;
+                rc_cfg->bps_min     = avctx->bit_rate * 1 / 16;
+            }
             rc_cfg->qp_init     = -1;
             rc_cfg->qp_max      = 51;
             rc_cfg->qp_min      = 10;
@@ -214,14 +220,9 @@ static int rkmpp_codec_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
     codec_cfg->coding = codectype;
     switch (codectype) {
     case MPP_VIDEO_CodingAVC: {
-        int qp_min = avctx->qmin,
-            qp_max = avctx->qmax,
-            qp_step = avctx->max_qdiff;
-        int qp_init = 26;
         codec_cfg->h264.change = MPP_ENC_H264_CFG_CHANGE_PROFILE |
                                  MPP_ENC_H264_CFG_CHANGE_ENTROPY |
-                                 MPP_ENC_H264_CFG_CHANGE_TRANS_8x8 |
-                                 MPP_ENC_H264_CFG_CHANGE_QP_LIMIT;
+                                 MPP_ENC_H264_CFG_CHANGE_TRANS_8x8;
         /*
          * H.264 profile_idc parameter
          * Support: Baseline profile
@@ -255,32 +256,6 @@ static int rkmpp_codec_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
             (codec_cfg->h264.profile == FF_PROFILE_H264_HIGH) ? 1 : 0;
         codec_cfg->h264.cabac_init_idc      = 0;
         codec_cfg->h264.transform8x8_mode   = 1;
-
-        if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_CBR) {
-            /* constant bitrate do not limit qp range */
-            qp_max  = 48;
-            qp_min  = 4;
-            qp_step = 16;
-            qp_init = 0;
-        } else if (rc_cfg->rc_mode == MPP_ENC_RC_MODE_VBR) {
-            if (rc_cfg->quality == MPP_ENC_RC_QUALITY_CQP) {
-                /* constant QP mode qp is fixed */
-                qp_max   = qp_init;
-                qp_min   = qp_init;
-                qp_step  = 0;
-            } else {
-                /* variable bitrate has qp min limit */
-                qp_max   = 40;
-                qp_min   = 12;
-                qp_step  = 8;
-                qp_init  = 0;
-            }
-        }
-
-        codec_cfg->h264.qp_max      = qp_max;
-        codec_cfg->h264.qp_min      = qp_min;
-        codec_cfg->h264.qp_max_step = qp_step;
-        codec_cfg->h264.qp_init     = qp_init;
     } break;
     case MPP_VIDEO_CodingMJPEG:
         codec_cfg->jpeg.change  = MPP_ENC_JPEG_CFG_CHANGE_QP;
@@ -311,6 +286,8 @@ static int rkmpp_init_encoder(AVCodecContext *avctx)
     MppEncCodecCfg codec_cfg;
     RK_S64 paramS64;
     MppEncSeiMode sei_mode;
+    RK_U8 enc_hdr_buf[SZ_1K];
+    RK_S32 enc_hdr_buf_size = SZ_1K;
     MppPacket packet = NULL;
 
     if (!avctx->hw_frames_ctx) {
@@ -408,33 +385,40 @@ static int rkmpp_init_encoder(AVCodecContext *avctx)
         goto fail;
     }
 
-    ret = encoder->mpi->control(encoder->ctx, MPP_ENC_GET_EXTRA_INFO, &packet);
+    memset(enc_hdr_buf, 0 , enc_hdr_buf_size);
+    ret = mpp_packet_init(&packet, (void *)enc_hdr_buf, enc_hdr_buf_size);
+    if (!packet) {
+        av_log(avctx, AV_LOG_ERROR, "Failed to init extra info packet (code = %d).\n", ret);
+        ret = AVERROR_UNKNOWN;
+        goto fail;
+    }
+
+    mpp_packet_set_length(packet, 0);
+    ret = encoder->mpi->control(encoder->ctx, MPP_ENC_GET_HDR_SYNC, packet);
     if (ret != MPP_OK) {
         av_log(avctx, AV_LOG_ERROR, "Failed to get extra info on MPI (code = %d).\n", ret);
         ret = AVERROR_UNKNOWN;
         goto fail;
     }
 
-    if (packet) {
-        /* get and write sps/pps for H.264 */
-        void *ptr   = mpp_packet_get_pos(packet);
-        size_t len  = mpp_packet_get_length(packet);
+    /* get and write sps/pps for H.264 */
+    void *ptr   = mpp_packet_get_pos(packet);
+    size_t len  = mpp_packet_get_length(packet);
 
-        if (avctx->extradata != NULL && avctx->extradata_size != len) {
-            av_free(avctx->extradata);
-            avctx->extradata = NULL;
-        }
-        if (!avctx->extradata)
-            avctx->extradata = av_malloc(len);
-        if (avctx->extradata == NULL) {
-            ret = AVERROR(ENOMEM);
-            goto fail;
-        }
-        avctx->extradata_size = len;
-        memcpy(avctx->extradata, ptr, len);
-
-        packet = NULL;
+    if (avctx->extradata != NULL && avctx->extradata_size != len) {
+        av_free(avctx->extradata);
+        avctx->extradata = NULL;
     }
+    if (!avctx->extradata)
+        avctx->extradata = av_malloc(len);
+    if (avctx->extradata == NULL) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
+    avctx->extradata_size = len;
+    memcpy(avctx->extradata, ptr, len);
+
+    packet = NULL;
 
     av_log(avctx, AV_LOG_DEBUG, "RKMPP encoder initialized successfully.\n");
 
