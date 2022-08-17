@@ -192,8 +192,6 @@ static int rkmpp_init_decoder(AVCodecContext *avctx)
     char *env;
     int ret;
 
-    // avctx->pix_fmt = ff_get_format(avctx, avctx->codec->pix_fmts);
-
     // create a decoder and a ref to it
     decoder = av_mallocz(sizeof(RKMPPDecoder));
     if (!decoder) {
@@ -787,7 +785,6 @@ static const AVCodecHWConfigInternal *const rkmpp_hw_configs[] = {
         .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
         .caps_internal  = FF_CODEC_CAP_CONTIGUOUS_BUFFERS, \
         .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, \
-/*                                                         AV_PIX_FMT_YUV420P, */\
                                                          AV_PIX_FMT_NONE}, \
         .hw_configs     = rkmpp_hw_configs, \
         .bsfs           = BSFS, \
