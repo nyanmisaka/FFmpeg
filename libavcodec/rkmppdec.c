@@ -762,7 +762,6 @@ static void rkmpp_flush(AVCodecContext *avctx)
 
 static const AVCodecHWConfigInternal *const rkmpp_hw_configs[] = {
     HW_CONFIG_INTERNAL(DRM_PRIME),
-    HW_CONFIG_INTERNAL(YUV420P),
     NULL
 };
 
