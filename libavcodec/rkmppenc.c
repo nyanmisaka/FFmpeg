@@ -35,6 +35,7 @@
 #include "libavutil/hwcontext.h"
 #include "libavutil/hwcontext_drm.h"
 #include "libavutil/log.h"
+#include "libavutil/pixdesc.h"
 
 // copy from mpp/base/inc/mpp_packet_impl.h
 #define MPP_PACKET_FLAG_INTRA       (0x00000008)
@@ -55,6 +56,7 @@ typedef struct {
 typedef struct {
     AVClass *av_class;
     AVBufferRef *encoder_ref;
+    MppEncPrepCfg prep_cfg;
 } RKMPPEncodeContext;
 
 typedef struct {
@@ -66,6 +68,8 @@ static MppCodingType rkmpp_get_codingtype(AVCodecContext *avctx)
 {
     switch (avctx->codec_id) {
     case AV_CODEC_ID_H264:          return MPP_VIDEO_CodingAVC;
+    case AV_CODEC_ID_HEVC:          return MPP_VIDEO_CodingHEVC;
+    case AV_CODEC_ID_VP8:           return MPP_VIDEO_CodingVP8;
     default:                        return MPP_VIDEO_CodingUnused;
     }
 }
@@ -77,9 +81,8 @@ static MppFrameFormat rkmpp_get_mppformat(enum AVPixelFormat avformat)
     case AV_PIX_FMT_YUV420P:        return MPP_FMT_YUV420P;
     case AV_PIX_FMT_YUYV422:        return MPP_FMT_YUV422_YUYV;
     case AV_PIX_FMT_UYVY422:        return MPP_FMT_YUV422_UYVY;
-#ifdef DRM_FORMAT_NV12_10
     case AV_PIX_FMT_P010:           return MPP_FMT_YUV420SP_10BIT;
-#endif
+    case AV_PIX_FMT_NV16:           return MPP_FMT_YUV422SP;
     default:                        return -1;
     }
 }
@@ -117,7 +120,10 @@ static int rkmpp_preg_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
     prep_cfg->height        = avctx->height;
     prep_cfg->hor_stride    = MPP_ALIGN(avctx->width, 16);
     prep_cfg->ver_stride    = MPP_ALIGN(avctx->height, 16);
-    prep_cfg->format        = rkmpp_get_mppformat(((AVHWFramesContext *)avctx->hw_frames_ctx->data)->sw_format);
+    prep_cfg->format        = rkmpp_get_mppformat(
+        avctx->hw_frames_ctx
+        ?((AVHWFramesContext *)avctx->hw_frames_ctx->data)->sw_format
+        :avctx->pix_fmt);
     prep_cfg->rotation      = MPP_ENC_ROT_0;
 
     ret = encoder->mpi->control(encoder->ctx, MPP_ENC_SET_PREP_CFG, prep_cfg);
@@ -132,7 +138,7 @@ static int rkmpp_preg_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
 static int rkmpp_rc_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
                            MppEncRcCfg *rc_cfg)
 {
-    int ret; 
+    int ret;
 
     memset(rc_cfg, 0, sizeof(*rc_cfg));
     rc_cfg->change  = MPP_ENC_RC_CFG_CHANGE_ALL;
@@ -281,7 +287,7 @@ static int rkmpp_init_encoder(AVCodecContext *avctx)
     MppCodingType codectype;
     RKMPPEncodeContext *rk_context;
     RKMPPEncoder *encoder;
-    MppEncPrepCfg prep_cfg;
+    MppEncPrepCfg *prep_cfg;
     MppEncRcCfg rc_cfg;
     MppEncCodecCfg codec_cfg;
     RK_S64 paramS64;
@@ -290,15 +296,14 @@ static int rkmpp_init_encoder(AVCodecContext *avctx)
     RK_S32 enc_hdr_buf_size = SZ_1K;
     MppPacket packet = NULL;
 
-    if (!avctx->hw_frames_ctx) {
-        av_log(avctx, AV_LOG_ERROR, "A hardware frames reference is "
-               "required to associate the encoding device.\n");
-        ret = AVERROR(EINVAL);
-        goto fail;
-    }
+    if (avctx->hw_frames_ctx)
+        av_log(avctx, AV_LOG_VERBOSE, "hw_frames_ctx->data=%p sw_format=%d(%s)\n", avctx->hw_frames_ctx->data,
+            ((AVHWFramesContext*)avctx->hw_frames_ctx->data)->sw_format,
+            av_get_pix_fmt_name(((AVHWFramesContext*)avctx->hw_frames_ctx->data)->sw_format));
 
     rk_context = avctx->priv_data;
     rk_context->encoder_ref = NULL;
+    prep_cfg = &rk_context->prep_cfg;
     codectype = rkmpp_get_codingtype(avctx);
     if (codectype == MPP_VIDEO_CodingUnused) {
         av_log(avctx, AV_LOG_ERROR, "Unsupport codec type (%d).\n", avctx->codec_id);
@@ -347,7 +352,7 @@ static int rkmpp_init_encoder(AVCodecContext *avctx)
     }
 
     // mpp setup
-    ret = rkmpp_preg_config(avctx, encoder, &prep_cfg);
+    ret = rkmpp_preg_config(avctx, encoder, prep_cfg);
     if (ret)
         goto fail;
 
@@ -430,7 +435,7 @@ fail:
     return ret;
 }
 
-static int rkmpp_queue_frame(AVCodecContext *avctx, RKMPPEncoder *encoder,
+static int rkmpp_queue_frame(AVCodecContext *avctx, RKMPPEncoder *encoder, MppEncPrepCfg *prep_cfg,
                              const AVFrame *avframe, MppFrame *out_frame)
 {
     int ret;
@@ -441,6 +446,8 @@ static int rkmpp_queue_frame(AVCodecContext *avctx, RKMPPEncoder *encoder,
     MppBufferInfo info;
     MppFrame frame = NULL;
     MppTask task = NULL;
+    RK_S32 hor_stride;
+    RK_S32 ver_stride;
 
     // check format
     if (avframe) {
@@ -450,6 +457,8 @@ static int rkmpp_queue_frame(AVCodecContext *avctx, RKMPPEncoder *encoder,
             return AVERROR(EINVAL);
         }
         swformat    = ((AVHWFramesContext*)avframe->hw_frames_ctx->data)->sw_format;
+        av_log(avctx, AV_LOG_DEBUG, "hw_frames_ctx->data=%p sw_format=%d\n", avframe->hw_frames_ctx->data,
+            ((AVHWFramesContext*)avframe->hw_frames_ctx->data)->sw_format);
         mppformat   = rkmpp_get_mppformat(swformat);
         if (mppformat < 0) {
             av_log(avctx, AV_LOG_ERROR, "Unsupport av format %d\n", swformat);
@@ -473,16 +482,29 @@ static int rkmpp_queue_frame(AVCodecContext *avctx, RKMPPEncoder *encoder,
         mpp_frame_set_width(frame, avframe->width);
         mpp_frame_set_height(frame, avframe->height);
         if (mppformat == MPP_FMT_YUV422_YUYV || mppformat == MPP_FMT_YUV422_UYVY) {
-            mpp_frame_set_hor_stride(frame, 2 * layer->planes[0].pitch/* /bpp */);
+            hor_stride = 2 * layer->planes[0].pitch;
         } else {
             // nv12 or yuv420p
-            mpp_frame_set_hor_stride(frame, layer->planes[0].pitch/* /bpp */);
+            hor_stride = layer->planes[0].pitch;
         }
         if (layer->nb_planes > 1)
-            mpp_frame_set_ver_stride(frame,
-                layer->planes[1].offset / layer->planes[0].pitch);
+            ver_stride = layer->planes[1].offset / layer->planes[0].pitch;
         else
-            mpp_frame_set_ver_stride(frame, avframe->height);
+            ver_stride = avframe->height;
+
+        if (prep_cfg->hor_stride != hor_stride || prep_cfg->ver_stride != ver_stride) {
+            prep_cfg->change = MPP_ENC_PREP_CFG_CHANGE_INPUT;
+            prep_cfg->hor_stride = hor_stride;
+            prep_cfg->ver_stride = ver_stride;
+            ret = encoder->mpi->control(encoder->ctx, MPP_ENC_SET_PREP_CFG, prep_cfg);
+            if (ret != MPP_OK) {
+                av_log(avctx, AV_LOG_ERROR, "Failed to set prep cfg on MPI (code = %d).\n", ret);
+                return AVERROR_UNKNOWN;
+            }
+        }
+
+        mpp_frame_set_hor_stride(frame, hor_stride/* /bpp */);
+        mpp_frame_set_ver_stride(frame, ver_stride);
         mpp_frame_set_fmt(frame, mppformat);
 
         memset(&info, 0, sizeof(info));
@@ -542,13 +564,13 @@ static int rkmpp_send_frame(AVCodecContext *avctx, const AVFrame *frame,
     if (!frame) {
         av_log(avctx, AV_LOG_DEBUG, "End of stream.\n");
         encoder->eos_reached = 1;
-        ret = rkmpp_queue_frame(avctx, encoder, NULL, mpp_frame);
+        ret = rkmpp_queue_frame(avctx, encoder, NULL, NULL, mpp_frame);
         if (ret)
             av_log(avctx, AV_LOG_ERROR, "Failed to send EOS to encoder (code = %d)\n", ret);
         return ret;
     }
 
-    ret = rkmpp_queue_frame(avctx, encoder, frame, mpp_frame);
+    ret = rkmpp_queue_frame(avctx, encoder, &rk_context->prep_cfg, frame, mpp_frame);
     if (ret && ret != AVERROR(EAGAIN))
         av_log(avctx, AV_LOG_ERROR, "Failed to send frame to encoder (code = %d)\n", ret);
 

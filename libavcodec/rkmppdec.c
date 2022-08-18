@@ -109,7 +109,7 @@ static uint32_t rkmpp_get_avformat(MppFrameFormat mppformat)
 {
     switch (mppformat) {
     case MPP_FMT_YUV420SP:          return AV_PIX_FMT_NV12;
-    case MPP_FMT_YUV420SP_10BIT:    return AV_PIX_FMT_NONE;
+    case MPP_FMT_YUV420SP_10BIT:    return AV_PIX_FMT_P010;
     case MPP_FMT_YUV422SP:          return AV_PIX_FMT_NV16;
     default:                        return 0;
     }
@@ -192,6 +192,8 @@ static int rkmpp_init_decoder(AVCodecContext *avctx)
     char *env;
     int ret;
 
+    avctx->pix_fmt = AV_PIX_FMT_DRM_PRIME;
+
     // create a decoder and a ref to it
     decoder = av_mallocz(sizeof(RKMPPDecoder));
     if (!decoder) {
@@ -268,8 +270,6 @@ static int rkmpp_init_decoder(AVCodecContext *avctx)
         goto fail;
     }
 
-    av_log(avctx, AV_LOG_DEBUG, "RKMPP decoder initialized successfully.\n");
-
     decoder->device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_DRM);
     if (!decoder->device_ref) {
         ret = AVERROR(ENOMEM);
@@ -278,6 +278,8 @@ static int rkmpp_init_decoder(AVCodecContext *avctx)
     ret = av_hwdevice_ctx_init(decoder->device_ref);
     if (ret < 0)
         goto fail;
+
+    av_log(avctx, AV_LOG_DEBUG, "RKMPP decoder initialized successfully.\n");
 
     return 0;
 
@@ -471,8 +473,9 @@ static int rkmpp_get_frame(AVCodecContext *avctx, AVFrame *frame, int timeout)
     if (mpp_frame_get_info_change(mppframe)) {
         AVHWFramesContext *hwframes;
 
-        av_log(avctx, AV_LOG_INFO, "Decoder noticed an info change (%dx%d), format=%d\n",
+        av_log(avctx, AV_LOG_INFO, "Decoder noticed an info change (%dx%d), stride(%dx%d), format=%d\n",
                (int)mpp_frame_get_width(mppframe), (int)mpp_frame_get_height(mppframe),
+               (int)mpp_frame_get_hor_stride(mppframe), (int)mpp_frame_get_ver_stride(mppframe), 
                (int)mpp_frame_get_fmt(mppframe));
 
         avctx->width = mpp_frame_get_width(mppframe);
@@ -493,6 +496,7 @@ static int rkmpp_get_frame(AVCodecContext *avctx, AVFrame *frame, int timeout)
             ret = AVERROR(ENOMEM);
             goto fail;
         }
+        av_log(avctx, AV_LOG_VERBOSE, "hw_frames_ctx->data=%p\n", decoder->frames_ref->data);
 
         mppformat = mpp_frame_get_fmt(mppframe);
 
