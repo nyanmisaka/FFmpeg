@@ -39,8 +39,11 @@ static int hwdownload_query_formats(AVFilterContext *avctx)
 {
     int err;
 
+    if ((err = ff_formats_ref(ff_all_formats(AVMEDIA_TYPE_VIDEO),
+                             &avctx->inputs[0]->outcfg.formats)) < 0)
+        return err;
     if ((err = ff_formats_ref(ff_formats_pixdesc_filter(0, AV_PIX_FMT_FLAG_HWACCEL),
-                              &avctx->outputs[0]->incfg.formats)))
+                             &avctx->outputs[0]->incfg.formats)) < 0)
         return err;
 
     return 0;
@@ -52,7 +55,7 @@ static int hwdownload_config_input(AVFilterLink *inlink)
     HWDownloadContext *ctx = avctx->priv;
 
     if (!inlink->hw_frames_ctx) {
-        av_log(ctx, AV_LOG_VERBOSE, "Passthrough software frame.\n");
+        av_log(avctx, AV_LOG_VERBOSE, "Passthrough software frame.\n");
         return 0;
     }
     av_buffer_unref(&ctx->hwframes_ref);
