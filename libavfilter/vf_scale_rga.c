@@ -46,9 +46,15 @@
 #endif
 
 typedef struct ScaleRGAContext {
-    MppBufferGroup frame_group;
+    const AVClass *class;
+
+    AVBufferRef *frame_group_ref;
+
     AVBufferRef *device_ref;
+    AVBufferRef *hwframes_ref;
     rga_rect_t output;
+
+    MppBufferGroup frame_group;
 
     int   mode;
 
@@ -59,6 +65,11 @@ typedef struct ScaleRGAContext {
 
     int down_scale_only;
 } ScaleRGAContext;
+
+typedef struct RGAFrameContext {
+    AVBufferRef *frame_group_ref;
+    MppBuffer buffer;
+} RGAFrameContext;
 
 static int ff_rga_query_formats(AVFilterContext *avctx)
 {
@@ -85,30 +96,37 @@ static int ff_rga_vpp_config_output(AVFilterLink *outlink){
     AVHWFramesContext *output_frames;
     int err;
 
-    outlink->hw_frames_ctx = av_hwframe_ctx_alloc(ctx->device_ref);
-    if (!outlink->hw_frames_ctx) {
-        av_log(avctx, AV_LOG_ERROR, "Failed to create HW frame context "
+    ctx->hwframes_ref = av_hwframe_ctx_alloc(ctx->device_ref);
+    if (!ctx->hwframes_ref) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to create HW frame context "
                "for output.\n");
         return AVERROR(ENOMEM);
     }
 
-    output_frames = (AVHWFramesContext*)outlink->hw_frames_ctx->data;
+    output_frames = (AVHWFramesContext*)ctx->hwframes_ref->data;
 
     output_frames->format    = AV_PIX_FMT_DRM_PRIME;
     output_frames->sw_format = ((AVHWFramesContext*)inlink->hw_frames_ctx->data)->sw_format;
     output_frames->width     = rect->width;
     output_frames->height    = rect->height;
 
-    err = av_hwframe_ctx_init(outlink->hw_frames_ctx);
+    err = av_hwframe_ctx_init(ctx->hwframes_ref);
     if (err < 0) {
-        av_log(avctx, AV_LOG_ERROR, "Failed to initialise RGA frame "
+        av_log(ctx, AV_LOG_ERROR, "Failed to initialise RGA frame "
                "context for output: %d\n", err);
         goto fail;
     }
+
+    outlink->hw_frames_ctx = av_buffer_ref(ctx->hwframes_ref);
+    if (!outlink->hw_frames_ctx) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+
     return 0;
 
 fail:
-    av_buffer_unref(&outlink->hw_frames_ctx);
+    av_buffer_unref(&ctx->hwframes_ref);
     return err;
 }
 
@@ -193,12 +211,14 @@ static int scale_rga_config_output(AVFilterLink *outlink)
     return 0;
 }
 
-static void rkmpp_release_frame(void *opaque, uint8_t *data)
+static void rga_release_frame(void *opaque, uint8_t *data)
 {
     AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *)data;
-    MppBuffer buffer = (MppBuffer)opaque;
-    mpp_buffer_put(buffer);
+    RGAFrameContext *framecontext = (RGAFrameContext *)opaque;
+    MppBuffer buffer = framecontext->buffer;
     av_free(desc);
+    mpp_buffer_put(buffer);
+    av_buffer_unref(&framecontext->frame_group_ref);
 }
 
 static uint32_t rga_get_drmformat(uint32_t rga_fmt)
@@ -223,6 +243,10 @@ static int scale_rga_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     AVFrame *output_frame    = NULL;
     int err;
     MppBuffer buffer = NULL;
+    AVDRMFrameDescriptor *desc;
+    AVDRMLayerDescriptor *layer;
+    AVBufferRef *frame_group_ref;
+    RGAFrameContext *framecontext = NULL;
     rga_info_t src_info = {0};
     rga_info_t dst_info = {0};
 
@@ -242,6 +266,11 @@ static int scale_rga_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     src_info.fd = desc->objects[0].fd;
     src_info.mmuFlag = 1;
 
+    frame_group_ref = av_buffer_ref(ctx->frame_group_ref);
+    if (!frame_group_ref) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
     err = mpp_buffer_get(ctx->frame_group, &buffer, rect->size);
     if (err) {
         av_log(ctx, AV_LOG_ERROR, "failed to get buffer for input frame ret %d\n", err);
@@ -257,23 +286,6 @@ static int scale_rga_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
         err = AVERROR(EINVAL);
         goto fail;
     }
-
-    output_frame = av_frame_alloc();
-    // output_frame = ff_get_video_buffer(outlink, rect->width,
-    //                                    rect->height);
-    if (!output_frame) {
-        err = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    err = av_frame_copy_props(output_frame, input_frame);
-    if (err < 0)
-        goto fail;
-
-    // setup general frame fields
-    output_frame->format           = AV_PIX_FMT_DRM_PRIME;
-    output_frame->width            = rect->width;
-    output_frame->height           = rect->height;
 
     desc = av_mallocz(sizeof(AVDRMFrameDescriptor));
     if (!desc) {
@@ -298,9 +310,34 @@ static int scale_rga_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     layer->planes[1].offset = layer->planes[0].pitch * rect->hstride;
     layer->planes[1].pitch = layer->planes[0].pitch;
 
+    // frame group needs to be closed only when all frames have been released.
+    framecontext = (RGAFrameContext *)av_mallocz(sizeof(RGAFrameContext));
+
+    if (!framecontext) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+    framecontext->frame_group_ref = frame_group_ref;
+    framecontext->buffer = buffer;
+
+    output_frame = av_frame_alloc();
+    if (!output_frame) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    err = av_frame_copy_props(output_frame, input_frame);
+    if (err < 0)
+        goto fail;
+
+    // setup general frame fields
+    output_frame->format           = AV_PIX_FMT_DRM_PRIME;
+    output_frame->width            = rect->width;
+    output_frame->height           = rect->height;
+
     output_frame->data[0]  = (uint8_t *)desc;
-    output_frame->buf[0]   = av_buffer_create((uint8_t *)desc, sizeof(*desc), rkmpp_release_frame,
-                                       buffer, AV_BUFFER_FLAG_READONLY);
+    output_frame->buf[0]   = av_buffer_create((uint8_t *)desc, sizeof(*desc), rga_release_frame,
+                                       framecontext, AV_BUFFER_FLAG_READONLY);
 
     if (!output_frame->buf[0]) {
         err = AVERROR(ENOMEM);
@@ -322,10 +359,21 @@ static int scale_rga_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     return ff_filter_frame(outlink, output_frame);
 
 fail:
-    mpp_buffer_put(buffer);
-    av_frame_free(&input_frame);
     av_frame_free(&output_frame);
+    if (framecontext)
+        av_free(framecontext);
+    av_free(desc);
+    mpp_buffer_put(buffer);
+    if (frame_group_ref)
+        av_buffer_unref(&frame_group_ref);
+    av_frame_free(&input_frame);
     return err;
+}
+
+static void rga_release_frame_group(void *opaque, uint8_t *data)
+{
+    MppBufferGroup fg = (MppBufferGroup)opaque;
+    mpp_buffer_group_put(fg);
 }
 
 static av_cold int scale_rga_init(AVFilterContext *avctx)
@@ -334,22 +382,32 @@ static av_cold int scale_rga_init(AVFilterContext *avctx)
     ScaleRGAContext *ctx   = avctx->priv;
 
     if (ret = mpp_buffer_group_get_internal(&ctx->frame_group, MPP_BUFFER_TYPE_DRM)) {
-       av_log(avctx, AV_LOG_ERROR, "Failed to get buffer group (code = %d)\n", ret);
-       return AVERROR_UNKNOWN;
+        av_log(ctx, AV_LOG_ERROR, "Failed to get buffer group (code = %d)\n", ret);
+        return AVERROR_UNKNOWN;
+    }
+
+    ctx->frame_group_ref = av_buffer_create(NULL, 0, rga_release_frame_group,
+                                               (void *)ctx->frame_group, AV_BUFFER_FLAG_READONLY);
+    if (!ctx->frame_group_ref) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
     }
 
     ctx->output.format = RK_FORMAT_UNKNOWN;
 
     ctx->device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_DRM);
     if (!ctx->device_ref) {
-        return AVERROR(ENOMEM);
+        ret = AVERROR(ENOMEM);
+        goto fail;
     }
+
     ret = av_hwdevice_ctx_init(ctx->device_ref);
     if (ret < 0)
         goto fail;
 
     return 0;
 fail:
+
     av_buffer_unref(&ctx->device_ref);
     mpp_buffer_group_put(ctx->frame_group);
     return ret;
@@ -358,7 +416,8 @@ fail:
 static void rga_ctx_uninit(AVFilterContext *avctx)
 {
     ScaleRGAContext *ctx   = avctx->priv;
-    mpp_buffer_group_put(ctx->frame_group);
+    av_buffer_unref(&ctx->frame_group_ref);
+    av_buffer_unref(&ctx->hwframes_ref);
     av_buffer_unref(&ctx->device_ref);
 }
 
@@ -400,11 +459,11 @@ const AVFilter ff_vf_scale_rga = {
     .name          = "scale_rga",
     .description   = NULL_IF_CONFIG_SMALL("Scale to/from RGA surfaces."),
     .priv_size     = sizeof(ScaleRGAContext),
+    .priv_class    = &scale_rga_class,
     .init          = &scale_rga_init,
     .uninit        = &rga_ctx_uninit,
     FILTER_INPUTS(scale_rga_inputs),
     FILTER_OUTPUTS(scale_rga_outputs),
     FILTER_QUERY_FUNC(&ff_rga_query_formats),
-    .priv_class    = &scale_rga_class,
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
 };
