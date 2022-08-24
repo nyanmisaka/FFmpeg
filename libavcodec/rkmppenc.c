@@ -37,6 +37,7 @@
 #include "libavutil/hwcontext_drm.h"
 #include "libavutil/log.h"
 #include "libavutil/pixdesc.h"
+#include "libavutil/opt.h"
 
 #define SEND_FRAME_TIMEOUT          100
 #define RECEIVE_PACKET_TIMEOUT      100
@@ -54,6 +55,8 @@ typedef struct {
     AVClass *av_class;
     AVBufferRef *encoder_ref;
     MppEncPrepCfg prep_cfg;
+    int profile;
+    int dct8x8;
 } RKMPPEncodeContext;
 
 typedef struct {
@@ -139,7 +142,7 @@ static int rkmpp_rc_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
 
     memset(rc_cfg, 0, sizeof(*rc_cfg));
     rc_cfg->change  = MPP_ENC_RC_CFG_CHANGE_ALL;
-    // TODO: set by AVOption
+
     rc_cfg->rc_mode = MPP_ENC_RC_MODE_VBR;
     rc_cfg->quality = MPP_ENC_RC_QUALITY_MEDIUM;
     if (avctx->flags & AV_CODEC_FLAG_QSCALE)
@@ -214,7 +217,7 @@ static int rkmpp_rc_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
 }
 
 static int rkmpp_codec_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
-                              MppCodingType codectype, MppEncRcCfg *rc_cfg,
+                              MppCodingType codectype, RKMPPEncodeContext *ctx,
                               MppEncCodecCfg *codec_cfg)
 {
     int ret;
@@ -226,20 +229,23 @@ static int rkmpp_codec_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
         codec_cfg->h264.change = MPP_ENC_H264_CFG_CHANGE_PROFILE |
                                  MPP_ENC_H264_CFG_CHANGE_ENTROPY |
                                  MPP_ENC_H264_CFG_CHANGE_TRANS_8x8;
+        if (ctx->profile == -1) {
+            ctx->profile = avctx->profile;
+        }
         /*
          * H.264 profile_idc parameter
          * Support: Baseline profile
          *          Main profile
          *          High profile
          */
-        if (avctx->profile != FF_PROFILE_H264_BASELINE &&
-            avctx->profile != FF_PROFILE_H264_MAIN &&
-            avctx->profile != FF_PROFILE_H264_HIGH) {
+        if (ctx->profile != FF_PROFILE_H264_BASELINE &&
+            ctx->profile != FF_PROFILE_H264_MAIN &&
+            ctx->profile != FF_PROFILE_H264_HIGH) {
             av_log(avctx, AV_LOG_INFO, "Unsupport profile %d, force set to %d\n",
-                   avctx->profile, FF_PROFILE_H264_HIGH);
-            avctx->profile = FF_PROFILE_H264_HIGH;
+                   ctx->profile, FF_PROFILE_H264_HIGH);
+            ctx->profile = FF_PROFILE_H264_HIGH;
         }
-        codec_cfg->h264.profile = avctx->profile;
+        codec_cfg->h264.profile = ctx->profile;
 
         /*
          * H.264 level_idc parameter
@@ -258,7 +264,7 @@ static int rkmpp_codec_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
         codec_cfg->h264.entropy_coding_mode =
             (codec_cfg->h264.profile == FF_PROFILE_H264_HIGH) ? 1 : 0;
         codec_cfg->h264.cabac_init_idc      = 0;
-        codec_cfg->h264.transform8x8_mode   = 1;
+        codec_cfg->h264.transform8x8_mode   = ctx->dct8x8==0?0:1;
     } break;
     case MPP_VIDEO_CodingMJPEG:
         codec_cfg->jpeg.change  = MPP_ENC_JPEG_CFG_CHANGE_QP;
@@ -357,7 +363,7 @@ static int rkmpp_init_encoder(AVCodecContext *avctx)
     if (ret)
         goto fail;
 
-    ret = rkmpp_codec_config(avctx, encoder, codectype, &rc_cfg, &codec_cfg);
+    ret = rkmpp_codec_config(avctx, encoder, codectype, rk_context, &codec_cfg);
     if (ret)
         goto fail;
 
@@ -704,6 +710,18 @@ static int rkmpp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     return 0;
 }
 
+#define OFFSET(x) offsetof(RKMPPEncodeContext, x)
+#define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
+static const AVOption options[] = {
+    { "profile",       "Set profile restrictions (h264_rkmpp)",    OFFSET(profile),       AV_OPT_TYPE_INT, { .i64=-1 }, 
+            -1, FF_PROFILE_H264_HIGH, VE, "profile"},
+        { "baseline",   NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_PROFILE_H264_BASELINE},  INT_MIN, INT_MAX, VE, "profile" },
+        { "main",       NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_PROFILE_H264_MAIN},      INT_MIN, INT_MAX, VE, "profile" },
+        { "high",       NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_PROFILE_H264_HIGH},      INT_MIN, INT_MAX, VE, "profile" },
+    { "8x8dct",        "High profile 8x8 transform (h264_rkmpp)", OFFSET(dct8x8), AV_OPT_TYPE_BOOL,   { .i64 = -1 }, -1, 1, VE},
+    { NULL }
+};
+
 static const AVCodecHWConfigInternal *rkmpp_hw_configs[] = {
     HW_CONFIG_ENCODER_FRAMES(DRM_PRIME, DRM),
     NULL
@@ -712,6 +730,8 @@ static const AVCodecHWConfigInternal *rkmpp_hw_configs[] = {
 #define RKMPP_ENC_CLASS(NAME) \
     static const AVClass rkmpp_##NAME##_enc_class = { \
         .class_name = "rkmpp_" #NAME "_enc", \
+        .item_name  = av_default_item_name,\
+        .option     = options, \
         .version    = LIBAVUTIL_VERSION_INT, \
     };
 
