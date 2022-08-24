@@ -46,6 +46,8 @@
 #define DRM_FORMAT_NV12_10 fourcc_code('N', 'A', '1', '2')
 #endif
 
+#define RGA_SW_USE_IMAGE_ALLOC
+
 typedef struct ScaleRGAContext {
     const AVClass *class;
 
@@ -144,23 +146,31 @@ static int ff_rga_vpp_config_output(AVFilterLink *outlink)
         }
 
         ctx->sw_frame->format = inlink->format;
-        ctx->sw_frame->width  = inlink->w;
-        ctx->sw_frame->height = inlink->h;
-
+        ctx->sw_frame->width  = FFALIGN(inlink->w, 2);
+        ctx->sw_frame->height = FFALIGN(inlink->h, 2);
+#ifdef RGA_SW_USE_IMAGE_ALLOC
+        if ((err = av_image_alloc(ctx->sw_frame->data, ctx->sw_frame->linesize, 
+            ctx->sw_frame->width, ctx->sw_frame->height, inlink->format, 32)) < 0)
+            goto fail;
+#else
         if ((err = av_frame_get_buffer(ctx->sw_frame, 0)) < 0)
             goto fail;
 
-        /* avoid plane align */
+        /* avoid plane padding */
         if ((err = av_image_fill_pointers(ctx->sw_frame->data, ctx->sw_frame->format, 
                     FFALIGN(ctx->sw_frame->height, 32),
                     ctx->sw_frame->buf[0]->data, ctx->sw_frame->linesize)) < 0)
             goto fail;
+#endif
 
     }
 
     return 0;
 
 fail:
+#ifdef RGA_SW_USE_IMAGE_ALLOC
+    av_freep(&ctx->sw_frame->data[0]);
+#endif
     av_frame_free(&ctx->sw_frame);
     av_buffer_unref(&ctx->hwframes_ref);
     return err;
@@ -216,6 +226,8 @@ static int scale_rga_config_output(AVFilterLink *outlink)
         rect->width = inlink->w;
         rect->height = inlink->h;
     }
+    rect->width = rect->width >> 1 << 1;
+    rect->height = rect->height >> 1 << 1;
     rect->wstride = rect->width;
     rect->hstride = rect->height;
     rect->xoffset = 0;
@@ -236,7 +248,7 @@ static int scale_rga_config_output(AVFilterLink *outlink)
         return err;
     }
     rect->format = ff_null_get_rgaformat(((AVHWFramesContext*)outlink->hw_frames_ctx->data)->sw_format);
-    rect->size = rect->width * rect->height * get_bpp_from_rga_format(rect->format);
+    rect->size = rect->wstride * rect->hstride * get_bpp_from_rga_format(rect->format);
 
     if (inlink->sample_aspect_ratio.num)
         outlink->sample_aspect_ratio = av_mul_q((AVRational){outlink->h * inlink->w, outlink->w * inlink->h}, inlink->sample_aspect_ratio);
@@ -291,26 +303,31 @@ static int scale_rga_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     if (inlink->hw_frames_ctx) {
         desc = (AVDRMFrameDescriptor*)input_frame->data[0];
         layer = &desc->layers[0];
-        rga_set_rect(&src_info.rect, 0, 0, input_frame->width, input_frame->height, layer->planes[0].pitch, 
-                layer->nb_planes > 1?(layer->planes[1].offset / layer->planes[0].pitch):input_frame->height,
-                ff_null_get_rgaformat(((AVHWFramesContext*)input_frame->hw_frames_ctx->data)->sw_format));
+        rga_set_rect(&src_info.rect, 0, 0, input_frame->width >> 1 << 1, input_frame->height >> 1 << 1, 
+            layer->planes[0].pitch, 
+            layer->nb_planes > 1?(layer->planes[1].offset / layer->planes[0].pitch):input_frame->height,
+            ff_null_get_rgaformat(((AVHWFramesContext*)input_frame->hw_frames_ctx->data)->sw_format));
         src_info.fd = desc->objects[0].fd;
     } else {
-        char *dst_y = ctx->sw_frame->data[0];
-        char *dst_u = ctx->sw_frame->data[1];
-        int y_pitch = ctx->sw_frame->linesize[0];
-        int dst_height = (dst_u - dst_y) / y_pitch;
+        char *src_y = input_frame->data[0];
+        char *src_u = input_frame->data[1];
+        int y_pitch = input_frame->linesize[0];
+        int src_height = (src_u - src_y) / y_pitch;
+        if (src_height < 0 || (src_height & 1) || (y_pitch & 1) || src_y + (src_height * y_pitch) != src_u) {
+            src_y = ctx->sw_frame->data[0];
+            src_u = ctx->sw_frame->data[1];
+            y_pitch = ctx->sw_frame->linesize[0];
+            src_height = (src_u - src_y) / y_pitch;
 
-        if ((err = av_frame_copy(ctx->sw_frame, input_frame)) < 0)
-            goto fail;
+            if ((err = av_frame_copy(ctx->sw_frame, input_frame)) < 0)
+                goto fail;
 
-        if ((err = av_frame_copy_props(ctx->sw_frame, input_frame)) < 0)
-            goto fail;
-
-        src_info.virAddr = dst_y;
-        rga_set_rect(&src_info.rect, 0, 0, ctx->sw_frame->width, ctx->sw_frame->height,
-                    y_pitch, dst_height,
-                    ff_null_get_rgaformat(ctx->sw_frame->format));
+            if ((err = av_frame_copy_props(ctx->sw_frame, input_frame)) < 0)
+                goto fail;
+        }
+        src_info.virAddr = src_y;
+        rga_set_rect(&src_info.rect, 0, 0, input_frame->width >> 1 << 1, input_frame->height >> 1 << 1,
+            y_pitch, src_height, ff_null_get_rgaformat(ctx->sw_frame->format));
     }
     src_info.mmuFlag = 1;
 
@@ -460,6 +477,9 @@ fail:
 static void rga_ctx_uninit(AVFilterContext *avctx)
 {
     ScaleRGAContext *ctx   = avctx->priv;
+#ifdef RGA_SW_USE_IMAGE_ALLOC
+    av_freep(&ctx->sw_frame->data[0]);
+#endif
     av_frame_free(&ctx->sw_frame);
     av_buffer_unref(&ctx->frame_group_ref);
     av_buffer_unref(&ctx->hwframes_ref);
