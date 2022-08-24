@@ -30,6 +30,7 @@
 #include "libavutil/hwcontext.h"
 #include "libavutil/hwcontext_drm.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/parseutils.h"
 
 #include "avfilter.h"
 #include "formats.h"
@@ -65,6 +66,7 @@ typedef struct ScaleRGAContext {
 
     char *w_expr;      // width expression string
     char *h_expr;      // height expression string
+    char *size_str;    // WxH expression
     int force_original_aspect_ratio;
     int force_divisible_by;
 
@@ -228,6 +230,8 @@ static int scale_rga_config_output(AVFilterLink *outlink)
     }
     rect->width = rect->width >> 1 << 1;
     rect->height = rect->height >> 1 << 1;
+    av_log(ctx, AV_LOG_DEBUG, "Final output video size w:%d h:%d\n", rect->width, rect->height);
+
     rect->wstride = rect->width;
     rect->hstride = rect->height;
     rect->xoffset = 0;
@@ -338,7 +342,7 @@ static int scale_rga_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     }
     err = mpp_buffer_get(ctx->frame_group, &buffer, rect->size);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "failed to get buffer for input frame ret %d\n", err);
+        av_log(ctx, AV_LOG_ERROR, "Failed to get buffer for input frame ret %d\n", err);
         err = AVERROR(ENOMEM);
         goto fail;
     }
@@ -431,6 +435,44 @@ fail:
     return err;
 }
 
+static av_cold int init_dict(AVFilterContext *ctx)
+{
+    ScaleRGAContext *scale = ctx->priv;
+    rga_rect_t *rect = &scale->output;
+    int ret;
+
+    if (scale->size_str && (scale->w_expr || scale->h_expr)) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Size and width/height expressions cannot be set at the same time.\n");
+            return AVERROR(EINVAL);
+    }
+
+    if (scale->w_expr && !scale->h_expr)
+        FFSWAP(char *, scale->w_expr, scale->size_str);
+
+    if (scale->size_str) {
+        char buf[32];
+        if ((ret = av_parse_video_size(&rect->width, &rect->height, scale->size_str)) < 0) {
+            av_log(ctx, AV_LOG_ERROR,
+                   "Invalid size '%s'\n", scale->size_str);
+            return ret;
+        }
+        snprintf(buf, sizeof(buf)-1, "%d", rect->width);
+        av_opt_set(scale, "w", buf, 0);
+        snprintf(buf, sizeof(buf)-1, "%d", rect->height);
+        av_opt_set(scale, "h", buf, 0);
+    }
+    if (!scale->w_expr)
+        av_opt_set(scale, "w", "iw", 0);
+    if (!scale->h_expr)
+        av_opt_set(scale, "h", "ih", 0);
+
+    av_log(ctx, AV_LOG_VERBOSE, "Parsed expr w:%s h:%s\n",
+           scale->w_expr, scale->h_expr);
+
+    return 0;
+}
+
 static void rga_release_frame_group(void *opaque, uint8_t *data)
 {
     MppBufferGroup fg = (MppBufferGroup)opaque;
@@ -441,6 +483,9 @@ static av_cold int scale_rga_init(AVFilterContext *avctx)
 {
     int ret;
     ScaleRGAContext *ctx   = avctx->priv;
+
+    if (ret = init_dict(avctx))
+        return ret;
 
     if (ret = mpp_buffer_group_get_internal(&ctx->frame_group, MPP_BUFFER_TYPE_DRM)) {
         av_log(ctx, AV_LOG_ERROR, "Failed to get buffer group (code = %d)\n", ret);
@@ -477,10 +522,12 @@ fail:
 static void rga_ctx_uninit(AVFilterContext *avctx)
 {
     ScaleRGAContext *ctx   = avctx->priv;
+    if (ctx->sw_frame) {
 #ifdef RGA_SW_USE_IMAGE_ALLOC
-    av_freep(&ctx->sw_frame->data[0]);
+        av_freep(&ctx->sw_frame->data[0]);
 #endif
-    av_frame_free(&ctx->sw_frame);
+        av_frame_free(&ctx->sw_frame);
+    }
     av_buffer_unref(&ctx->frame_group_ref);
     av_buffer_unref(&ctx->hwframes_ref);
     av_buffer_unref(&ctx->device_ref);
@@ -489,16 +536,17 @@ static void rga_ctx_uninit(AVFilterContext *avctx)
 #define OFFSET(x) offsetof(ScaleRGAContext, x)
 #define FLAGS (AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM)
 static const AVOption scale_rga_options[] = {
-    { "w", "Output video width",
-      OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, .flags = FLAGS },
-    { "h", "Output video height",
-      OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, .flags = FLAGS },
-    { "force_original_aspect_ratio", "decrease or increase w/h if necessary to keep the original AR", OFFSET(force_original_aspect_ratio), AV_OPT_TYPE_INT, { .i64 = 0}, 0, 2, FLAGS, "force_oar" },
-    { "disable",  NULL, 0, AV_OPT_TYPE_CONST, {.i64 = 0 }, 0, 0, FLAGS, "force_oar" },
-    { "decrease", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = 1 }, 0, 0, FLAGS, "force_oar" },
-    { "increase", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = 2 }, 0, 0, FLAGS, "force_oar" },
-    { "force_divisible_by", "enforce that the output resolution is divisible by a defined integer when force_original_aspect_ratio is used", OFFSET(force_divisible_by), AV_OPT_TYPE_INT, { .i64 = 1}, 1, 256, FLAGS },
-    { "down_scale_only", "do not upscale", OFFSET(down_scale_only), AV_OPT_TYPE_BOOL, { .i64 = 1}, -1, 1, FLAGS },
+    { "w", "output video width", OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS },
+    { "h", "output video height", OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS },
+    { "s", "output video size (WxH)", OFFSET(size_str), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS },
+    { "force_original_aspect_ratio", "decrease or increase w/h if necessary to keep the original AR", 
+            OFFSET(force_original_aspect_ratio), AV_OPT_TYPE_INT, { .i64 = 1}, 0, 2, FLAGS, "force_oar" },
+        { "disable",  NULL, 0, AV_OPT_TYPE_CONST, {.i64 = 0 }, 0, 0, FLAGS, "force_oar" },
+        { "decrease", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = 1 }, 0, 0, FLAGS, "force_oar" },
+        { "increase", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = 2 }, 0, 0, FLAGS, "force_oar" },
+    { "force_divisible_by", "enforce that the output resolution is divisible by a defined integer when force_original_aspect_ratio is used", 
+            OFFSET(force_divisible_by), AV_OPT_TYPE_INT, { .i64 = 1}, 1, 256, FLAGS },
+    { "down_scale_only", "do not upscale", OFFSET(down_scale_only), AV_OPT_TYPE_BOOL, { .i64 = 1}, 0, 1, FLAGS },
     { NULL },
 };
 
