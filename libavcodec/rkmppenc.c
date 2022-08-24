@@ -1,6 +1,7 @@
 /*
  * RockChip MPP Video Encoder
  * Copyright (c) 2018 hertz.wang@rock-chips.com
+ * Copyright (c) 2022 jjm2473 at gmail.com
  *
  * This file is part of FFmpeg.
  *
@@ -37,13 +38,9 @@
 #include "libavutil/log.h"
 #include "libavutil/pixdesc.h"
 
-// copy from mpp/base/inc/mpp_packet_impl.h
-#define MPP_PACKET_FLAG_INTRA       (0x00000008)
-
 #define SEND_FRAME_TIMEOUT          100
 #define RECEIVE_PACKET_TIMEOUT      100
 
-#define MPP_ALIGN(x, a)         (((x)+(a)-1)&~((a)-1))
 #define SZ_1K                   (1024)
 
 typedef struct {
@@ -118,8 +115,8 @@ static int rkmpp_preg_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
                               MPP_ENC_PREP_CFG_CHANGE_FORMAT;
     prep_cfg->width         = avctx->width;
     prep_cfg->height        = avctx->height;
-    prep_cfg->hor_stride    = MPP_ALIGN(avctx->width, 16);
-    prep_cfg->ver_stride    = MPP_ALIGN(avctx->height, 16);
+    prep_cfg->hor_stride    = FFALIGN(avctx->width, 16);
+    prep_cfg->ver_stride    = FFALIGN(avctx->height, 16);
     prep_cfg->format        = rkmpp_get_mppformat(
         avctx->hw_frames_ctx
         ?((AVHWFramesContext *)avctx->hw_frames_ctx->data)->sw_format
@@ -204,7 +201,7 @@ static int rkmpp_rc_config(AVCodecContext *avctx, RKMPPEncoder *encoder,
         av_reduce(&rc_cfg->fps_out_num, &rc_cfg->fps_out_denorm,
                   avctx->time_base.den, avctx->time_base.num, 65535);
 
-    rc_cfg->gop             = avctx->gop_size;
+    rc_cfg->gop             = FFMAX(avctx->gop_size, 1);
     rc_cfg->skip_cnt        = 0;
 
     ret = encoder->mpi->control(encoder->ctx, MPP_ENC_SET_RC_CFG, rc_cfg);
