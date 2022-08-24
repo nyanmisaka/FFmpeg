@@ -567,6 +567,13 @@ static int rkmpp_send_frame(AVCodecContext *avctx, const AVFrame *frame,
         return ret;
     }
 
+    if (frame->pict_type == AV_PICTURE_TYPE_I) {
+        ret = encoder->mpi->control(encoder->ctx, MPP_ENC_SET_IDR_FRAME, NULL);
+        if (ret != MPP_OK) {
+            av_log(avctx, AV_LOG_ERROR, "Failed to set IDR frame on MPI (code = %d).\n", ret);
+            return AVERROR_UNKNOWN;
+        }
+    }
     ret = rkmpp_queue_frame(avctx, encoder, &rk_context->prep_cfg, frame, mpp_frame);
     if (ret && ret != AVERROR(EAGAIN))
         av_log(avctx, AV_LOG_ERROR, "Failed to send frame to encoder (code = %d)\n", ret);
