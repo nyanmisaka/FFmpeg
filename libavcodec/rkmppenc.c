@@ -623,7 +623,8 @@ static int rkmpp_receive_packet(AVCodecContext *avctx, AVPacket *pkt,
 
     if (packet) {
         RKMPPPacketContext *pkt_ctx;
-        RK_U32 flag;
+        MppMeta meta = NULL;
+        int keyframe = 0;
 
         if (mpp_packet_get_eos(packet)) {
             av_log(avctx, AV_LOG_DEBUG, "Received a EOS packet.\n");
@@ -657,8 +658,10 @@ static int rkmpp_receive_packet(AVCodecContext *avctx, AVPacket *pkt,
             pkt->pts = pkt->dts;
         if (pkt->dts <= 0)
             pkt->dts = pkt->pts;
-        flag = mpp_packet_get_flag(packet);
-        if (flag & MPP_PACKET_FLAG_INTRA)
+        meta = mpp_packet_get_meta(packet);
+        if (meta)
+            mpp_meta_get_s32(meta, KEY_OUTPUT_INTRA, &keyframe);
+        if (keyframe)
             pkt->flags |= AV_PKT_FLAG_KEY;
 
         packet = NULL;
