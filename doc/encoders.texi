@@ -3654,6 +3654,15 @@ Set the encoding profile (scc requires libmfx >= 1.32).
 @item scc
 @end table
 
+@item @var{tier}
+Set the encoding tier.
+
+@table @samp
+@item auto
+@item main
+@item high
+@end table
+
 @item @var{gpb}
 1: GPB (generalized P/B frame)
 
