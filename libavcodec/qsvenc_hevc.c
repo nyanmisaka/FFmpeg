@@ -258,6 +258,10 @@ static const AVOption options[] = {
 #if QSV_VERSION_ATLEAST(1, 32)
     { "scc",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_PROFILE_HEVC_SCC     }, INT_MIN, INT_MAX,     VE, "profile" },
 #endif
+    { "tier",    NULL, OFFSET(qsv.tier), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, MFX_TIER_HEVC_HIGH, VE, "tier" },
+    { "auto",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = -1                       }, INT_MIN, INT_MAX,     VE, "tier" },
+    { "main",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_TIER_HEVC_MAIN       }, INT_MIN, INT_MAX,     VE, "tier" },
+    { "high",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MFX_TIER_HEVC_HIGH       }, INT_MIN, INT_MAX,     VE, "tier" },
 
     { "gpb", "1: GPB (generalized P/B frame); 0: regular P frame", OFFSET(qsv.gpb), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, VE},
 
