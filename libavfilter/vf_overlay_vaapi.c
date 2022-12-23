@@ -416,7 +416,7 @@ static int overlay_vaapi_config_input_overlay(AVFilterLink *inlink)
     }
 
     if (have_alpha_planar(inlink))
-        ctx->blend_flags |= VA_BLEND_PREMULTIPLIED_ALPHA;
+        ctx->blend_flags |= 0;//VA_BLEND_PREMULTIPLIED_ALPHA;
 
     return 0;
 }
