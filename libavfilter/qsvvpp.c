@@ -623,7 +623,7 @@ static int init_vpp_session(AVFilterContext *avctx, QSVVPPContext *s)
     if (ret == MFX_ERR_NONE)
         ret = MFXQueryVersion(device_hwctx->session, &ver);
     if (ret != MFX_ERR_NONE) {
-        av_log(avctx, AV_LOG_ERROR, "Error querying the session attributes\n");
+        av_log(avctx, AV_LOG_ERROR, "Error querying the runtime version\n");
         return AVERROR_UNKNOWN;
     }
 
@@ -651,6 +651,12 @@ static int init_vpp_session(AVFilterContext *avctx, QSVVPPContext *s)
                                        &s->session);
     if (ret)
         return ret;
+
+    ret = MFXQueryVersion(s->session, &s->ver);
+    if (ret != MFX_ERR_NONE) {
+        av_log(avctx, AV_LOG_ERROR, "Error querying the session attributes\n");
+        return AVERROR_UNKNOWN;
+    }
 
     if (handle) {
         ret = MFXVideoCORE_SetHandle(s->session, handle_type, handle);
@@ -746,28 +752,36 @@ int ff_qsvvpp_init(AVFilterContext *avctx, QSVVPPParam *param)
         goto failed;
     }
 
+    s->nb_seq_buffers = param->num_ext_buf;
 #if QSV_HAVE_OPAQUE
-    if (IS_OPAQUE_MEMORY(s->in_mem_mode) || IS_OPAQUE_MEMORY(s->out_mem_mode)) {
-        s->nb_ext_buffers = param->num_ext_buf + 1;
-        s->ext_buffers = av_calloc(s->nb_ext_buffers, sizeof(*s->ext_buffers));
-        if (!s->ext_buffers) {
-            ret = AVERROR(ENOMEM);
-            goto failed;
-        }
-
-        s->ext_buffers[0] = (mfxExtBuffer *)&s->opaque_alloc;
-        for (i = 1; i < param->num_ext_buf; i++)
-            s->ext_buffers[i]    = param->ext_buf[i - 1];
-        s->vpp_param.ExtParam    = s->ext_buffers;
-        s->vpp_param.NumExtParam = s->nb_ext_buffers;
-    } else {
-        s->vpp_param.NumExtParam = param->num_ext_buf;
-        s->vpp_param.ExtParam    = param->ext_buf;
-    }
-#else
-    s->vpp_param.NumExtParam = param->num_ext_buf;
-    s->vpp_param.ExtParam    = param->ext_buf;
+    if (IS_OPAQUE_MEMORY(s->in_mem_mode) || IS_OPAQUE_MEMORY(s->out_mem_mode))
+        s->nb_seq_buffers++;
 #endif
+
+    s->seq_buffers = av_calloc(s->nb_seq_buffers, sizeof(*s->seq_buffers));
+    if (!s->seq_buffers) {
+        ret = AVERROR(ENOMEM);
+        goto failed;
+    }
+
+    for (i = 0; i < param->num_ext_buf; i++)
+        s->seq_buffers[i]    = param->ext_buf[i];
+
+#if QSV_HAVE_OPAQUE
+    if (IS_OPAQUE_MEMORY(s->in_mem_mode) || IS_OPAQUE_MEMORY(s->out_mem_mode))
+        s->seq_buffers[i] = (mfxExtBuffer *)&s->opaque_alloc;
+#endif
+
+    s->nb_ext_buffers = s->nb_seq_buffers;
+    s->ext_buffers = av_calloc(s->nb_ext_buffers, sizeof(*s->ext_buffers));
+    if (!s->ext_buffers) {
+        ret = AVERROR(ENOMEM);
+        goto failed;
+    }
+
+    memcpy(s->ext_buffers, s->seq_buffers, s->nb_seq_buffers * sizeof(*s->seq_buffers));
+    s->vpp_param.ExtParam    = s->ext_buffers;
+    s->vpp_param.NumExtParam = s->nb_ext_buffers;
 
     s->got_frame = 0;
 
@@ -832,9 +846,8 @@ int ff_qsvvpp_close(AVFilterContext *avctx)
     clear_frame_list(&s->out_frame_list);
     av_freep(&s->surface_ptrs_in);
     av_freep(&s->surface_ptrs_out);
-#if QSV_HAVE_OPAQUE
+    av_freep(&s->seq_buffers);
     av_freep(&s->ext_buffers);
-#endif
     av_freep(&s->frame_infos);
     av_fifo_freep2(&s->async_fifo);
 
@@ -1034,4 +1047,29 @@ AVFrame *ff_qsvvpp_get_video_buffer(AVFilterLink *inlink, int w, int h)
                                         FFALIGN(inlink->w, 32),
                                         FFALIGN(inlink->h, 32),
                                         16);
+}
+
+int ff_qsvvpp_reset_with_frame_params(AVFilterContext *avctx, QSVVPPContext *vpp, QSVVPPFrameParam *fp)
+{
+    int ret;
+
+    av_freep(&vpp->ext_buffers);
+    vpp->nb_ext_buffers = vpp->nb_seq_buffers + fp->num_ext_buf;
+    vpp->ext_buffers = av_calloc(vpp->nb_ext_buffers, sizeof(*vpp->ext_buffers));
+    if (!vpp->ext_buffers)
+        return AVERROR(ENOMEM);
+
+    memcpy(&vpp->ext_buffers[0], vpp->seq_buffers, vpp->nb_seq_buffers * sizeof(*vpp->seq_buffers));
+    memcpy(&vpp->ext_buffers[vpp->nb_seq_buffers], fp->ext_buf, fp->num_ext_buf * sizeof(*fp->ext_buf));
+    vpp->vpp_param.ExtParam    = vpp->ext_buffers;
+    vpp->vpp_param.NumExtParam = vpp->nb_ext_buffers;
+
+    ret = MFXVideoVPP_Reset(vpp->session, &vpp->vpp_param);
+    if (ret < 0) {
+        ret = ff_qsvvpp_print_error(avctx, ret, "Failed to reset session for qsvvpp");
+        return ret;
+    } else if (ret > 0)
+        ff_qsvvpp_print_warning(avctx, ret, "Warning When resetting session for qsvvpp");
+
+    return 0;
 }

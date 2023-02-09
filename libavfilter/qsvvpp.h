@@ -74,15 +74,22 @@ typedef struct QSVVPPContext {
 #if QSV_HAVE_OPAQUE
     /** MFXVPP extern parameters */
     mfxExtOpaqueSurfaceAlloc opaque_alloc;
+#endif
+    /** store sequence parameters */
+    mfxExtBuffer      **seq_buffers;
+    int                 nb_seq_buffers;
+
+    /** store all parameters for vpp execution, including parameters per frame */
     mfxExtBuffer      **ext_buffers;
     int                 nb_ext_buffers;
-#endif
 
     int got_frame;
     int async_depth;
     int eof;
     /** order with frame_out, sync */
     AVFifo *async_fifo;
+
+    mfxVersion ver;
 } QSVVPPContext;
 
 typedef struct QSVVPPCrop {
@@ -106,6 +113,12 @@ typedef struct QSVVPPParam {
     QSVVPPCrop *crop;
 } QSVVPPParam;
 
+typedef struct QSVVPPFrameParam {
+    /* To fill with MFX enhanced filter configurations */
+    int num_ext_buf;
+    mfxExtBuffer **ext_buf;
+} QSVVPPFrameParam;
+
 /* create and initialize the QSV session */
 int ff_qsvvpp_init(AVFilterContext *avctx, QSVVPPParam *param);
 
@@ -128,4 +141,7 @@ int ff_qsvvpp_create_mfx_session(void *ctx, void *loader, mfxIMPL implementation
                                  mfxVersion *pver, mfxSession *psession);
 
 AVFrame *ff_qsvvpp_get_video_buffer(AVFilterLink *inlink, int w, int h);
+
+int ff_qsvvpp_reset_with_frame_params(AVFilterContext *avctx, QSVVPPContext *vpp, QSVVPPFrameParam *fp);
+
 #endif /* AVFILTER_QSVVPP_H */

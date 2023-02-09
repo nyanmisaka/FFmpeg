@@ -173,8 +173,11 @@ static int hevc_mp4toannexb_filter(AVBSFContext *ctx, AVPacket *out)
         if (ret < 0)
             goto fail;
 
-        if (extra_size)
-            memcpy(out->data + prev_size, ctx->par_out->extradata, extra_size);
+        if (extra_size) {
+            memmove(out->data + extra_size, out->data, prev_size);
+            memcpy(out->data, ctx->par_out->extradata, extra_size);
+        }
+
         AV_WB32(out->data + prev_size + extra_size, 1);
         bytestream2_get_buffer(&gb, out->data + prev_size + 4 + extra_size, nalu_size);
     }
