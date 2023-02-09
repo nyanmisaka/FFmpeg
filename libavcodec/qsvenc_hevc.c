@@ -363,6 +363,9 @@ static const AVOption options[] = {
     { "int_ref_qp_delta",   "QP difference for the refresh MBs",                 OFFSET(qsv.int_ref_qp_delta),        AV_OPT_TYPE_INT, { .i64 = INT16_MIN }, INT16_MIN,  INT16_MAX, VE },
     { "int_ref_cycle_dist",   "Distance between the beginnings of the intra-refresh cycles in frames",  OFFSET(qsv.int_ref_cycle_dist),      AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT16_MAX, VE },
 
+#if QSV_ONEVPL
+    { "main10sp", "This profile allow to encode 10 bit single still picture", OFFSET(qsv.main10sp), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VE},
+#endif
     { NULL },
 };
 
@@ -400,6 +403,8 @@ const FFCodec ff_hevc_qsv_encoder = {
                                                     AV_PIX_FMT_YUYV422,
                                                     AV_PIX_FMT_Y210,
                                                     AV_PIX_FMT_QSV,
+                                                    AV_PIX_FMT_VAAPI,
+                                                    AV_PIX_FMT_D3D11,
                                                     AV_PIX_FMT_BGRA,
                                                     AV_PIX_FMT_X2RGB10,
                                                     AV_PIX_FMT_VUYX,

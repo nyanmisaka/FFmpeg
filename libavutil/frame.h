@@ -214,6 +214,11 @@ enum AVFrameSideDataType {
      * Ambient viewing environment metadata, as defined by H.274.
      */
     AV_FRAME_DATA_AMBIENT_VIEWING_ENVIRONMENT,
+
+    /**
+     * Sub frame of a target frame, as described by AVFrame.
+     */
+    AV_FRAME_DATA_SUB_FRAME,
 };
 
 enum AVActiveFormatDescription {

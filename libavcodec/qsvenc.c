@@ -204,6 +204,7 @@ static void dump_video_param(AVCodecContext *avctx, QSVEncContext *q,
 #endif
 
     const char *tmp_str = NULL;
+    mfxExtHEVCParam *exthevcparam = NULL;
 
     if (q->co2_idx > 0)
         co2 = (mfxExtCodingOption2*)coding_opts[q->co2_idx];
@@ -219,6 +220,8 @@ static void dump_video_param(AVCodecContext *avctx, QSVEncContext *q,
         exthypermodeparam = (mfxExtHyperModeParam *)coding_opts[q->exthypermodeparam_idx];
 #endif
 
+    if (q->exthevcparam_idx > 0)
+        exthevcparam = (mfxExtHEVCParam *)coding_opts[q->exthevcparam_idx];
     av_log(avctx, AV_LOG_VERBOSE, "profile: %s; level: %"PRIu16"\n",
            print_profile(avctx->codec_id, info->CodecProfile), info->CodecLevel);
 
@@ -399,6 +402,11 @@ static void dump_video_param(AVCodecContext *avctx, QSVEncContext *q,
         av_log(avctx, AV_LOG_VERBOSE, "\n");
     }
 #endif
+    if (exthevcparam &&
+        exthevcparam->GeneralConstraintFlags == MFX_HEVC_CONSTR_REXT_ONE_PICTURE_ONLY &&
+        avctx->codec_id == AV_CODEC_ID_HEVC &&
+        info->CodecProfile == MFX_PROFILE_HEVC_MAIN10)
+        av_log(avctx, AV_LOG_VERBOSE, "Main10sp (Main10 profile and one_pic_only flag): enable\n");
 }
 
 static void dump_video_vp9_param(AVCodecContext *avctx, QSVEncContext *q,
@@ -680,7 +688,9 @@ static int is_strict_gop(QSVEncContext *q) {
 
 static int init_video_param_jpeg(AVCodecContext *avctx, QSVEncContext *q)
 {
-    enum AVPixelFormat sw_format = avctx->pix_fmt == AV_PIX_FMT_QSV ?
+    enum AVPixelFormat sw_format = avctx->pix_fmt == AV_PIX_FMT_QSV ||
+                                   avctx->pix_fmt == AV_PIX_FMT_VAAPI ||
+                                   avctx->pix_fmt == AV_PIX_FMT_D3D11 ?
                                    avctx->sw_pix_fmt : avctx->pix_fmt;
     const AVPixFmtDescriptor *desc;
     int ret;
@@ -746,7 +756,9 @@ static int init_video_param_jpeg(AVCodecContext *avctx, QSVEncContext *q)
 
 static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
 {
-    enum AVPixelFormat sw_format = avctx->pix_fmt == AV_PIX_FMT_QSV ?
+    enum AVPixelFormat sw_format = avctx->pix_fmt == AV_PIX_FMT_QSV ||
+                                   avctx->pix_fmt == AV_PIX_FMT_VAAPI ||
+                                   avctx->pix_fmt == AV_PIX_FMT_D3D11 ?
                                    avctx->sw_pix_fmt : avctx->pix_fmt;
     const AVPixFmtDescriptor *desc;
     float quant;
@@ -1176,6 +1188,18 @@ static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
         q->extparam_internal[q->nb_extparam_internal++] = (mfxExtBuffer *)&q->exthevctiles;
     }
 
+    if (avctx->codec_id == AV_CODEC_ID_HEVC && q->main10sp) {
+        if (QSV_RUNTIME_VERSION_ATLEAST(q->ver, 2, 0)) {
+            q->param.mfx.CodecProfile = MFX_PROFILE_HEVC_MAIN10;
+            q->exthevcparam.Header.BufferId = MFX_EXTBUFF_HEVC_PARAM;
+            q->exthevcparam.Header.BufferSz = sizeof(q->exthevcparam);
+            q->exthevcparam.GeneralConstraintFlags = MFX_HEVC_CONSTR_REXT_ONE_PICTURE_ONLY;
+            q->extparam_internal[q->nb_extparam_internal++] = (mfxExtBuffer *)&q->exthevcparam;
+        } else
+            av_log(avctx, AV_LOG_WARNING,
+                   "This version of runtime doesn't support 10bit single still picture\n");
+    }
+
     q->extvsi.VideoFullRange = (avctx->color_range == AVCOL_RANGE_JPEG);
     q->extvsi.ColourDescriptionPresent = 0;
 
@@ -1423,12 +1447,17 @@ static int qsv_retrieve_enc_params(AVCodecContext *avctx, QSVEncContext *q)
     };
 #endif
 
-    mfxExtBuffer *ext_buffers[6 + QSV_HAVE_HE];
+    mfxExtHEVCParam hevc_param_buf = {
+        .Header.BufferId = MFX_EXTBUFF_HEVC_PARAM,
+        .Header.BufferSz = sizeof(hevc_param_buf),
+    };
 
+    mfxExtBuffer *ext_buffers[7 + QSV_HAVE_HE];
     int need_pps = avctx->codec_id != AV_CODEC_ID_MPEG2VIDEO;
     int ret, ext_buf_num = 0, extradata_offset = 0;
 
     q->co2_idx = q->co3_idx = q->exthevctiles_idx = q->exthypermodeparam_idx = -1;
+    q->exthevcparam_idx = -1;
     ext_buffers[ext_buf_num++] = (mfxExtBuffer*)&extradata;
     ext_buffers[ext_buf_num++] = (mfxExtBuffer*)&co;
 
@@ -1456,6 +1485,10 @@ static int qsv_retrieve_enc_params(AVCodecContext *avctx, QSVEncContext *q)
         ext_buffers[ext_buf_num++] = (mfxExtBuffer*)&hyper_mode_param_buf;
     }
 #endif
+    if (avctx->codec_id == AV_CODEC_ID_HEVC && QSV_RUNTIME_VERSION_ATLEAST(q->ver, 2, 0)) {
+        q->exthevcparam_idx = ext_buf_num;
+        ext_buffers[ext_buf_num++] = (mfxExtBuffer*)&hevc_param_buf;
+    }
 
     q->param.ExtParam    = ext_buffers;
     q->param.NumExtParam = ext_buf_num;
@@ -1613,7 +1646,31 @@ int ff_qsv_enc_init(AVCodecContext *avctx, QSVEncContext *q)
 
     if (avctx->hw_frames_ctx) {
         AVHWFramesContext    *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
-        AVQSVFramesContext *frames_hwctx = frames_ctx->hwctx;
+        AVQSVFramesContext *frames_hwctx = NULL;
+
+        if (frames_ctx->format == AV_PIX_FMT_VAAPI || frames_ctx->format == AV_PIX_FMT_D3D11) {
+            AVBufferRef *derive_device_ref = NULL;
+            AVBufferRef *derive_frames_ref = NULL;
+            ret = av_hwdevice_ctx_create_derived(&derive_device_ref,
+                                                 AV_HWDEVICE_TYPE_QSV, frames_ctx->device_ref, 0);
+            if (ret < 0) {
+                av_log(avctx, AV_LOG_ERROR, "Failed to derive QSV device context: %d.\n", ret);
+                return ret;
+            }
+            ret = av_hwframe_ctx_create_derived(&derive_frames_ref,
+                                                AV_PIX_FMT_QSV, derive_device_ref, avctx->hw_frames_ctx, 0);
+            if (ret < 0) {
+                av_log(avctx, AV_LOG_ERROR, "Failed to derive QSV frames context: %d.\n", ret);
+                av_buffer_unref(&derive_device_ref);
+                return ret;
+            }
+            av_buffer_unref(&avctx->hw_device_ctx);
+            avctx->hw_device_ctx = derive_device_ref;
+            av_buffer_unref(&avctx->hw_frames_ctx);
+            avctx->hw_frames_ctx = derive_frames_ref;
+            frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
+        }
+        frames_hwctx = frames_ctx->hwctx;
 
         if (!iopattern) {
 #if QSV_HAVE_OPAQUE
@@ -1768,6 +1825,10 @@ static void clear_unused_frames(QSVEncContext *q)
             memset(&cur->enc_ctrl, 0, sizeof(cur->enc_ctrl));
             cur->enc_ctrl.Payload = cur->payloads;
             cur->enc_ctrl.ExtParam = cur->extparam;
+            if (cur->external_frame) {
+                av_freep(&cur->surface.Data.MemId);
+                cur->external_frame = 0;
+            }
             if (cur->frame->format == AV_PIX_FMT_QSV) {
                 av_frame_unref(cur->frame);
             }
@@ -1882,19 +1943,42 @@ static int submit_frame(QSVEncContext *q, const AVFrame *frame,
     if (ret < 0)
         return ret;
 
-    if (frame->format == AV_PIX_FMT_QSV) {
-        ret = av_frame_ref(qf->frame, frame);
-        if (ret < 0)
-            return ret;
+    if (frame->format == AV_PIX_FMT_QSV || frame->format == AV_PIX_FMT_VAAPI || frame->format == AV_PIX_FMT_D3D11) {
+        if (frame->format == AV_PIX_FMT_QSV) {
+            ret = av_frame_ref(qf->frame, frame);
+            if (ret < 0)
+                return ret;
+        } else {
+            qf->frame->format = AV_PIX_FMT_QSV;
+            qf->frame->hw_frames_ctx = av_buffer_ref(q->avctx->hw_frames_ctx);
+            if (!qf->frame->hw_frames_ctx)
+                return AVERROR(ENOMEM);
+            ret = av_hwframe_map(qf->frame, frame, 0);
+            if (ret < 0) {
+                av_log(q->avctx, AV_LOG_ERROR, "Failed to map to QSV frames\n");
+                return ret;
+            }
+            ret = av_frame_copy_props(qf->frame, frame);
+            if (ret < 0)
+                return ret;
+        }
 
         qf->surface = *(mfxFrameSurface1*)qf->frame->data[3];
 
+
         if (q->frames_ctx.mids) {
             ret = ff_qsv_find_surface_idx(&q->frames_ctx, qf);
-            if (ret < 0)
-                return ret;
-
-            qf->surface.Data.MemId = &q->frames_ctx.mids[ret];
+            if (ret >= 0)
+                qf->surface.Data.MemId = &q->frames_ctx.mids[ret];
+        }
+        if (!q->frames_ctx.mids || ret < 0) {
+            QSVMid *mid = NULL;
+            mid = (QSVMid *)av_mallocz(sizeof(*mid));
+            if (!mid)
+                return AVERROR(ENOMEM);
+            mid->handle_pair = (mfxHDLPair *)qf->surface.Data.MemId;
+            qf->surface.Data.MemId = mid;
+            qf->external_frame = 1;
         }
     } else {
         /* make a copy if the input is not padded as libmfx requires */
@@ -2582,6 +2666,8 @@ int ff_qsv_enc_close(AVCodecContext *avctx, QSVEncContext *q)
 
 const AVCodecHWConfigInternal *const ff_qsv_enc_hw_configs[] = {
     HW_CONFIG_ENCODER_FRAMES(QSV,  QSV),
+    HW_CONFIG_ENCODER_FRAMES(VAAPI,VAAPI),
+    HW_CONFIG_ENCODER_FRAMES(D3D11,D3D11VA),
     HW_CONFIG_ENCODER_DEVICE(NV12, QSV),
     HW_CONFIG_ENCODER_DEVICE(P010, QSV),
     NULL,

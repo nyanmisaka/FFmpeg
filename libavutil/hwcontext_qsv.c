@@ -115,7 +115,6 @@ static const struct {
     { AV_PIX_FMT_BGRA, MFX_FOURCC_RGB4, 0 },
     { AV_PIX_FMT_P010, MFX_FOURCC_P010, 1 },
     { AV_PIX_FMT_PAL8, MFX_FOURCC_P8,   0 },
-#if CONFIG_VAAPI
     { AV_PIX_FMT_YUYV422,
                        MFX_FOURCC_YUY2, 0 },
     { AV_PIX_FMT_UYVY422,
@@ -143,7 +142,6 @@ static const struct {
     // the SDK only delares support for Y416
     { AV_PIX_FMT_XV36,
                        MFX_FOURCC_Y416, 1 },
-#endif
 #endif
 };
 
@@ -355,7 +353,7 @@ static void qsv_frames_uninit(AVHWFramesContext *ctx)
     av_buffer_unref(&s->child_frames_ref);
 }
 
-static void qsv_pool_release_dummy(void *opaque, uint8_t *data)
+static void qsv_release_dummy(void *opaque, uint8_t *data)
 {
 }
 
@@ -368,7 +366,7 @@ static AVBufferRef *qsv_pool_alloc(void *opaque, size_t size)
     if (s->nb_surfaces_used < hwctx->nb_surfaces) {
         s->nb_surfaces_used++;
         return av_buffer_create((uint8_t*)(s->surfaces_internal + s->nb_surfaces_used - 1),
-                                sizeof(*hwctx->surfaces), qsv_pool_release_dummy, NULL, 0);
+                                sizeof(*hwctx->surfaces), qsv_release_dummy, NULL, 0);
     }
 
     return NULL;
@@ -1526,7 +1524,6 @@ static int map_frame_to_surface(const AVFrame *frame, mfxFrameSurface1 *surface)
         surface->Data.R = frame->data[0] + 2;
         surface->Data.A = frame->data[0] + 3;
         break;
-#if CONFIG_VAAPI
     case AV_PIX_FMT_YUYV422:
         surface->Data.Y = frame->data[0];
         surface->Data.U = frame->data[0] + 1;
@@ -1563,7 +1560,6 @@ static int map_frame_to_surface(const AVFrame *frame, mfxFrameSurface1 *surface)
         surface->Data.U = frame->data[0];
         surface->Data.V = frame->data[0] + 2;
         break;
-#endif
     default:
         return MFX_ERR_UNSUPPORTED;
     }
@@ -1878,11 +1874,23 @@ static int qsv_frames_derive_to(AVHWFramesContext *dst_ctx,
     return 0;
 }
 
+static void qsv_umap_from_vaapi(AVHWFramesContext *dst_fc,
+                                 HWMapDescriptor *hwmap)
+{
+    mfxFrameSurface1 *new_sur = (mfxFrameSurface1 *)hwmap->priv;
+    mfxHDLPair *hdlpair = (mfxHDLPair *)new_sur->Data.MemId;
+    av_freep(&hdlpair->first);
+    av_freep(&new_sur->Data.MemId);
+    av_freep(&new_sur);
+}
+
 static int qsv_map_to(AVHWFramesContext *dst_ctx,
                       AVFrame *dst, const AVFrame *src, int flags)
 {
     AVQSVFramesContext *hwctx = dst_ctx->hwctx;
     int i, err, index = -1;
+    mfxFrameSurface1 *new_sur = NULL;
+    mfxHDLPair *new_hdlpair = NULL;
 
     for (i = 0; i < hwctx->nb_surfaces && index < 0; i++) {
         switch(src->format) {
@@ -1921,21 +1929,77 @@ static int qsv_map_to(AVHWFramesContext *dst_ctx,
         }
     }
     if (index < 0) {
-        av_log(dst_ctx, AV_LOG_ERROR, "Trying to map from a surface which "
-               "is not in the mapped frames context.\n");
-        return AVERROR(EINVAL);
-    }
+        switch (src->format) {
+#if CONFIG_VAAPI
+        case AV_PIX_FMT_VAAPI:
+        {
+            new_sur = (mfxFrameSurface1 *)av_mallocz(sizeof(*new_sur));
+            if (!new_sur) {
+                err = AVERROR(ENOMEM);
+                goto qsv_map_to_err;
+            }
+            err = qsv_init_surface(dst_ctx, new_sur);
+            if (err < 0)
+                goto qsv_map_to_err;
 
-    err = ff_hwframe_map_create(dst->hw_frames_ctx,
-                                dst, src, NULL, NULL);
-    if (err)
-        return err;
+            new_hdlpair = (mfxHDLPair *)av_mallocz(sizeof(*new_hdlpair));
+            if (!new_hdlpair) {
+                err = AVERROR(ENOMEM);
+                goto qsv_map_to_err;
+            }
+            new_hdlpair->first = (VASurfaceID *)av_mallocz(sizeof(VASurfaceID));
+            if (!new_hdlpair->first) {
+                err = AVERROR(ENOMEM);
+                goto qsv_map_to_err;
+            }
+            *(VASurfaceID*)(new_hdlpair->first) = (VASurfaceID)(uintptr_t)src->data[3];
+            new_sur->Data.MemId = new_hdlpair;
+
+            err = ff_hwframe_map_create(dst->hw_frames_ctx, dst, src,
+                                        &qsv_umap_from_vaapi,
+                                        (void*)new_sur);
+            if (err)
+                goto qsv_map_to_err;
+
+            av_log(dst_ctx, AV_LOG_DEBUG, "Trying to map from a surface which "
+                "is not in the mapped frames context, so create a new surface\n");
+        }
+        break;
+#endif
+#if CONFIG_DXVA2
+        case AV_PIX_FMT_DXVA2_VLD:
+        {
+            av_log(dst_ctx, AV_LOG_ERROR, "Trying to map from a surface which "
+                "is not in the mapped frames context.\n");
+            return AVERROR(EINVAL);
+        }
+        break;
+#endif
+        default:
+            return AVERROR(ENOSYS);
+        }
+    } else {
+        err = ff_hwframe_map_create(dst->hw_frames_ctx,
+                                    dst, src, NULL, NULL);
+        if (err)
+            goto qsv_map_to_err;
+    }
 
     dst->width   = src->width;
     dst->height  = src->height;
-    dst->data[3] = (uint8_t*)&hwctx->surfaces[index];
+    dst->data[3] = (uint8_t*)((index == -1) ? new_sur : &hwctx->surfaces[index]);
 
     return 0;
+
+qsv_map_to_err:
+    if (new_sur)
+        av_freep(&new_sur);
+    if (new_hdlpair) {
+        if (new_hdlpair->first)
+            av_freep(&new_hdlpair->first);
+        av_freep(&new_hdlpair);
+    }
+    return err;
 }
 
 static int qsv_frames_get_constraints(AVHWDeviceContext *ctx,
@@ -2201,8 +2265,15 @@ static int qsv_device_create(AVHWDeviceContext *ctx, const char *device,
     child_device = (AVHWDeviceContext*)priv->child_device_ctx->data;
 
     impl = choose_implementation(device, child_device_type);
+    ret = qsv_device_derive_from_child(ctx, impl, child_device, 0);
+    if (ret >= 0) {
+        ctx->internal->source_device = av_buffer_ref(priv->child_device_ctx);
+        child_device->internal->derived_devices[ctx->type] = av_buffer_create((uint8_t*)ctx, sizeof(*ctx), qsv_release_dummy, ctx, 0);
+        if (!child_device->internal->derived_devices[ctx->type])
+            return AVERROR(ENOMEM);
+    }
 
-    return qsv_device_derive_from_child(ctx, impl, child_device, 0);
+    return ret;
 }
 
 const HWContextType ff_hwcontext_type_qsv = {

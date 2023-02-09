@@ -176,6 +176,7 @@ typedef struct QSVEncContext {
     mfxExtMultiFrameControl extmfc;
 #endif
     mfxExtHEVCTiles exthevctiles;
+    mfxExtHEVCParam exthevcparam;
     mfxExtVP9Param  extvp9param;
 #if QSV_HAVE_EXT_AV1_PARAM
     mfxExtAV1TileParam extav1tileparam;
@@ -192,7 +193,7 @@ typedef struct QSVEncContext {
 
     mfxExtVideoSignalInfo extvsi;
 
-    mfxExtBuffer  *extparam_internal[5 + (QSV_HAVE_MF * 2) + (QSV_HAVE_EXT_AV1_PARAM * 2) + QSV_HAVE_HE];
+    mfxExtBuffer  *extparam_internal[6 + (QSV_HAVE_MF * 2) + (QSV_HAVE_EXT_AV1_PARAM * 2) + QSV_HAVE_HE];
     int         nb_extparam_internal;
 
     mfxExtBuffer **extparam;
@@ -314,6 +315,9 @@ typedef struct QSVEncContext {
     int skip_frame;
     // This is used for Hyper Encode
     int dual_gfx;
+    int exthevcparam_idx;
+    int main10sp;
+
 } QSVEncContext;
 
 int ff_qsv_enc_init(AVCodecContext *avctx, QSVEncContext *q);

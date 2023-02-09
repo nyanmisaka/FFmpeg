@@ -259,6 +259,8 @@ static int decode_profile_tier_level(GetBitContext *gb, AVCodecContext *avctx,
         av_log(avctx, AV_LOG_DEBUG, "Main Still Picture profile bitstream\n");
     else if (ptl->profile_idc == FF_PROFILE_HEVC_REXT)
         av_log(avctx, AV_LOG_DEBUG, "Range Extension profile bitstream\n");
+    else if (ptl->profile_idc == FF_PROFILE_HEVC_SCC)
+        av_log(avctx, AV_LOG_DEBUG, "Screen Content Coding Extension profile bitstream\n");
     else
         av_log(avctx, AV_LOG_WARNING, "Unknown HEVC profile: %d\n", ptl->profile_idc);
 
@@ -851,7 +853,7 @@ int ff_hevc_parse_sps(HEVCSPS *sps, GetBitContext *gb, unsigned int *sps_id,
     HEVCWindow *ow;
     int ret = 0;
     int log2_diff_max_min_transform_block_size;
-    int bit_depth_chroma, start, vui_present, sublayer_ordering_info;
+    int bit_depth_chroma, start, vui_present, sublayer_ordering_info, num_comps;
     int i;
 
     // Coded parameters
@@ -1072,8 +1074,20 @@ int ff_hevc_parse_sps(HEVCSPS *sps, GetBitContext *gb, unsigned int *sps_id,
         decode_vui(gb, avctx, apply_defdispwin, sps);
 
     if (get_bits1(gb)) { // sps_extension_flag
-        sps->sps_range_extension_flag = get_bits1(gb);
-        skip_bits(gb, 7); //sps_extension_7bits = get_bits(gb, 7);
+        sps->sps_range_extension_flag      = get_bits1(gb);
+
+        /* To keep consistency with the workaround for hevc-conformance-PS_A_VIDYO_3
+         * in PPS, here ignore sps_multilayer_extension_flag, sps_3d_extension_flag
+         * and sps_scc_extension_flag for non-SCC streams too. Note multilayer_extension
+         * or 3d_extension is not implemented in FFmpeg */
+        if (sps->ptl.general_ptl.profile_idc == FF_PROFILE_HEVC_SCC) {
+            sps->sps_multilayer_extension_flag = get_bits1(gb);
+            sps->sps_3d_extension_flag         = get_bits1(gb);
+            sps->sps_scc_extension_flag        = get_bits1(gb);
+            skip_bits(gb, 4); //sps_extension_4bits = get_bits(gb, 4);
+        } else
+            skip_bits(gb, 7);
+
         if (sps->sps_range_extension_flag) {
             sps->transform_skip_rotation_enabled_flag = get_bits1(gb);
             sps->transform_skip_context_enabled_flag  = get_bits1(gb);
@@ -1098,6 +1112,32 @@ int ff_hevc_parse_sps(HEVCSPS *sps, GetBitContext *gb, unsigned int *sps_id,
             if (sps->cabac_bypass_alignment_enabled_flag)
                 av_log(avctx, AV_LOG_WARNING,
                    "cabac_bypass_alignment_enabled_flag not yet implemented\n");
+        }
+        if (sps->sps_multilayer_extension_flag || sps->sps_3d_extension_flag) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "multilayer_extension or 3d_extension not yet implemented\n");
+            return AVERROR_PATCHWELCOME;
+        }
+
+        if (sps->sps_scc_extension_flag) {
+            sps->sps_curr_pic_ref_enabled_flag = get_bits1(gb);
+            sps->palette_mode_enabled_flag     = get_bits1(gb);
+            if (sps->palette_mode_enabled_flag) {
+                sps->palette_max_size = get_ue_golomb_long(gb);
+                sps->delta_palette_max_predictor_size = get_ue_golomb_long(gb);
+                sps->sps_palette_predictor_initializers_present_flag = get_bits1(gb);
+
+                if (sps->sps_palette_predictor_initializers_present_flag) {
+                    sps->sps_num_palette_predictor_initializers_minus1 = get_ue_golomb_long(gb);
+                    num_comps = !sps->chroma_format_idc ? 1 : 3;
+                    for (int comp = 0; comp < num_comps; comp++)
+                        for (i = 0; i <= sps->sps_num_palette_predictor_initializers_minus1; i++)
+                            sps->sps_palette_predictor_initializer[comp][i] =
+                                    get_bits(gb, !comp ? sps->bit_depth : sps->bit_depth_chroma);
+                }
+            }
+            sps->motion_vector_resolution_control_idc   = get_bits(gb, 2);
+            sps->intra_boundary_filtering_disabled_flag = get_bits1(gb);
         }
     }
     if (apply_defdispwin) {
@@ -1302,6 +1342,48 @@ static int pps_range_extensions(GetBitContext *gb, AVCodecContext *avctx,
         return AVERROR_INVALIDDATA;
 
     return(0);
+}
+
+static int pps_scc_extension(GetBitContext *gb, AVCodecContext *avctx,
+                             HEVCPPS *pps, HEVCSPS *sps)
+{
+    int num_comps;
+    int i, ret;
+
+    pps->pps_curr_pic_ref_enabled_flag = get_bits1(gb);
+    if (pps->residual_adaptive_colour_transform_enabled_flag = get_bits1(gb)) {
+        pps->pps_slice_act_qp_offsets_present_flag = get_bits1(gb);
+        pps->pps_act_y_qp_offset  = get_se_golomb_long(gb) - 5;
+        pps->pps_act_cb_qp_offset = get_se_golomb_long(gb) - 5;
+        pps->pps_act_cr_qp_offset = get_se_golomb_long(gb) - 3;
+
+#define CHECK_QP_OFFSET(name) (pps->pps_act_ ## name ## _qp_offset < -12 || \
+                               pps->pps_act_ ## name ## _qp_offset > 12)
+        ret = CHECK_QP_OFFSET(y) || CHECK_QP_OFFSET(cb) || CHECK_QP_OFFSET(cr);
+#undef CHECK_QP_OFFSET
+        if (ret) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "PpsActQpOffsetY/Cb/Cr shall be in the range of [-12, 12].\n");
+            return AVERROR_INVALIDDATA;
+        }
+    }
+
+    if (pps->pps_palette_predictor_initializers_present_flag = get_bits1(gb)) {
+        if ((pps->pps_num_palette_predictor_initializers = get_ue_golomb_long(gb)) > 0) {
+            pps->monochrome_palette_flag = get_bits1(gb);
+            pps->luma_bit_depth_entry_minus8 = get_ue_golomb_long(gb);
+            if (!pps->monochrome_palette_flag)
+                pps->chroma_bit_depth_entry_minus8 = get_ue_golomb_long(gb);
+            num_comps = pps->monochrome_palette_flag ? 1 : 3;
+            for (int comp = 0; comp < num_comps; comp++)
+                for (i = 0; i < pps->pps_num_palette_predictor_initializers; i++)
+                    pps->pps_palette_predictor_initializer[comp][i] =
+                        get_bits(gb, 8 + (!comp ? pps->luma_bit_depth_entry_minus8 :
+                                          pps->chroma_bit_depth_entry_minus8));
+        }
+    }
+
+    return 0;
 }
 
 static inline int setup_pps(AVCodecContext *avctx, GetBitContext *gb,
@@ -1657,9 +1739,35 @@ int ff_hevc_decode_nal_pps(GetBitContext *gb, AVCodecContext *avctx,
 
     if (get_bits1(gb)) { // pps_extension_present_flag
         pps->pps_range_extensions_flag = get_bits1(gb);
-        skip_bits(gb, 7); // pps_extension_7bits
-        if (sps->ptl.general_ptl.profile_idc == FF_PROFILE_HEVC_REXT && pps->pps_range_extensions_flag) {
+
+        /* hevc-conformance-PS_A_VIDYO_3 in fate has pps_multilayer_extension_flag (1),
+         * pps_3d_extension_flag (1) and pps_scc_extension_flag (1) but has the wrong
+         * data for pps_multilayer_extension(), pps_3d_extension(), and pps_scc_extension().
+         * To avoid regression for hevc-conformance-PS_A_VIDYO_3, here check
+         * pps_multilayer_extension_flag, pps_3d_extension_flag and pps_scc_extension_flag
+         * only for SCC streams */
+        if (sps->ptl.general_ptl.profile_idc == FF_PROFILE_HEVC_SCC) {
+            pps->pps_multilayer_extension_flag = get_bits1(gb);
+            pps->pps_3d_extension_flag         = get_bits1(gb);
+            pps->pps_scc_extension_flag        = get_bits1(gb);
+            skip_bits(gb, 4); // pps_extension_4bits
+        } else
+            skip_bits(gb, 7);
+
+        if (pps->pps_range_extensions_flag) {
             if ((ret = pps_range_extensions(gb, avctx, pps, sps)) < 0)
+                goto err;
+        }
+
+        if (pps->pps_multilayer_extension_flag || pps->pps_3d_extension_flag) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "multilayer_extension or 3d_extension not yet implemented\n");
+            ret = AVERROR_PATCHWELCOME;
+            goto err;
+        }
+
+        if (pps->pps_scc_extension_flag) {
+            if ((ret = pps_scc_extension(gb, avctx, pps, sps)) < 0)
                 goto err;
         }
     }

@@ -587,8 +587,11 @@ static int hls_slice_header(HEVCContext *s)
             ff_hevc_clear_refs(s);
     }
     sh->no_output_of_prior_pics_flag = 0;
-    if (IS_IRAP(s))
+    if (IS_IRAP(s)) {
         sh->no_output_of_prior_pics_flag = get_bits1(gb);
+        if (s->avctx->skip_frame == AVDISCARD_INVALID)
+            s->avctx->skip_frame = AVDISCARD_DEFAULT;
+    }
 
     sh->pps_id = get_ue_golomb_long(gb);
     if (sh->pps_id >= HEVC_MAX_PPS_COUNT || !s->ps.pps_list[sh->pps_id]) {
@@ -668,7 +671,8 @@ static int hls_slice_header(HEVCContext *s)
                    sh->slice_type);
             return AVERROR_INVALIDDATA;
         }
-        if (IS_IRAP(s) && sh->slice_type != HEVC_SLICE_I) {
+        if (IS_IRAP(s) && sh->slice_type != HEVC_SLICE_I &&
+            s->ps.sps->ptl.general_ptl.profile_idc != FF_PROFILE_HEVC_SCC) {
             av_log(s->avctx, AV_LOG_ERROR, "Inter slices in an IRAP frame.\n");
             return AVERROR_INVALIDDATA;
         }
@@ -839,6 +843,14 @@ static int hls_slice_header(HEVCContext *s)
                        sh->max_num_merge_cand);
                 return AVERROR_INVALIDDATA;
             }
+
+            // Syntax in 7.3.6.1
+            if (s->ps.sps->motion_vector_resolution_control_idc == 2)
+                sh->use_integer_mv_flag = get_bits1(gb);
+            else
+                // Inferred to be equal to motion_vector_resolution_control_idc if not present
+                sh->use_integer_mv_flag = s->ps.sps->motion_vector_resolution_control_idc;
+
         }
 
         sh->slice_qp_delta = get_se_golomb(gb);
@@ -854,6 +866,12 @@ static int hls_slice_header(HEVCContext *s)
         } else {
             sh->slice_cb_qp_offset = 0;
             sh->slice_cr_qp_offset = 0;
+        }
+
+        if (s->ps.pps->pps_slice_act_qp_offsets_present_flag) {
+            sh->slice_act_y_qp_offset  = get_se_golomb(gb);
+            sh->slice_act_cb_qp_offset = get_se_golomb(gb);
+            sh->slice_act_cr_qp_offset = get_se_golomb(gb);
         }
 
         if (s->ps.pps->chroma_qp_offset_list_enabled_flag)
@@ -3049,6 +3067,7 @@ static int decode_nal_unit(HEVCContext *s, const H2645NAL *nal)
         if (
             (s->avctx->skip_frame >= AVDISCARD_BIDIR && s->sh.slice_type == HEVC_SLICE_B) ||
             (s->avctx->skip_frame >= AVDISCARD_NONINTRA && s->sh.slice_type != HEVC_SLICE_I) ||
+            (s->avctx->skip_frame >= AVDISCARD_INVALID && !IS_IRAP(s)) ||
             (s->avctx->skip_frame >= AVDISCARD_NONKEY && !IS_IRAP(s))) {
             break;
         }

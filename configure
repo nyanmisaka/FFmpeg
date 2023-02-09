@@ -279,6 +279,7 @@ External library support:
   --enable-libtheora       enable Theora encoding via libtheora [no]
   --enable-libtls          enable LibreSSL (via libtls), needed for https support
                            if openssl, gnutls or mbedtls is not used [no]
+  --enable-libtorch        enable Torch as one DNN backend
   --enable-libtwolame      enable MP2 encoding via libtwolame [no]
   --enable-libuavs3d       enable AVS3 decoding via libuavs3d [no]
   --enable-libv4l2         enable libv4l2/v4l-utils [no]
@@ -293,6 +294,7 @@ External library support:
   --enable-libx265         enable HEVC encoding via x265 [no]
   --enable-libxavs         enable AVS encoding via xavs [no]
   --enable-libxavs2        enable AVS2 encoding via xavs2 [no]
+  --enable-libxcam         enable image processing via xcam [no]
   --enable-libxcb          enable X11 grabbing using XCB [autodetect]
   --enable-libxcb-shm      enable X11 grabbing shm communication [autodetect]
   --enable-libxcb-xfixes   enable X11 grabbing mouse rendering [autodetect]
@@ -1731,6 +1733,7 @@ EXAMPLE_LIST="
     scaling_video_example
     transcode_aac_example
     transcoding_example
+    vaapi_decode_example
     vaapi_encode_example
     vaapi_transcode_example
     qsv_transcode_example
@@ -1838,6 +1841,7 @@ EXTERNAL_LIBRARY_LIST="
     libopus
     libplacebo
     libpulse
+    libtorch
     librabbitmq
     librav1e
     librist
@@ -1862,6 +1866,7 @@ EXTERNAL_LIBRARY_LIST="
     libvorbis
     libvpx
     libwebp
+    libxcam
     libxml2
     libzimg
     libzmq
@@ -2716,7 +2721,7 @@ dct_select="rdft"
 deflate_wrapper_deps="zlib"
 dirac_parse_select="golomb"
 dovi_rpu_select="golomb"
-dnn_suggest="libtensorflow libopenvino"
+dnn_suggest="libtensorflow libopenvino libtorch"
 dnn_deps="avformat swscale"
 error_resilience_select="me_cmp"
 faandct_deps="faan"
@@ -3259,6 +3264,8 @@ av1_qsv_decoder_select="qsvdec"
 av1_qsv_encoder_select="qsvenc"
 av1_qsv_encoder_deps="libvpl"
 av1_amf_encoder_deps="amf"
+av1_vaapi_encoder_deps="VAEncPictureParameterBufferAV1"
+av1_vaapi_encoder_select="cbs_av1 vaapi_encode"
 
 # parsers
 aac_parser_select="adts_header mpeg4audio"
@@ -3765,6 +3772,7 @@ scale_vaapi_filter_deps="vaapi"
 scale_vulkan_filter_deps="vulkan spirv_compiler"
 vpp_qsv_filter_deps="libmfx"
 vpp_qsv_filter_select="qsvvpp"
+xcam_filter_deps="libxcam"
 xfade_opencl_filter_deps="opencl"
 yadif_cuda_filter_deps="ffnvcodec"
 yadif_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
@@ -3795,6 +3803,7 @@ resampling_audio_example_deps="avutil swresample"
 scaling_video_example_deps="avutil swscale"
 transcode_aac_example_deps="avcodec avformat swresample"
 transcoding_example_deps="avfilter avcodec avformat avutil"
+vaapi_decode_example_deps="avcodec avformat avutil"
 vaapi_encode_example_deps="avcodec avutil h264_vaapi_encoder"
 vaapi_transcode_example_deps="avcodec avformat avutil h264_vaapi_encoder"
 qsv_transcode_example_deps="avcodec avformat avutil h264_qsv_encoder"
@@ -6662,6 +6671,7 @@ enabled libopus           && {
 }
 enabled libplacebo        && require_pkg_config libplacebo "libplacebo >= 4.192.0" libplacebo/vulkan.h pl_vulkan_create
 enabled libpulse          && require_pkg_config libpulse libpulse pulse/pulseaudio.h pa_context_new
+enabled libtorch          && add_cppflags -D_GLIBCXX_USE_CXX11_ABI=0 && check_cxxflags -std=c++14 && require_cpp libtorch torch/torch.h "torch::Tensor" -ltorch -lc10 -ltorch_cpu -lstdc++ -lpthread -Wl,--no-as-needed -lipex_gpu_core -Wl,--as-needed
 enabled librabbitmq       && require_pkg_config librabbitmq "librabbitmq >= 0.7.1" amqp.h amqp_new_connection
 enabled librav1e          && require_pkg_config librav1e "rav1e >= 0.5.0" rav1e.h rav1e_context_new
 enabled librist           && require_pkg_config librist "librist >= 0.2.7" librist/librist.h rist_receiver_create
@@ -6727,6 +6737,8 @@ enabled libx265           && require_pkg_config libx265 x265 x265.h x265_api_get
                              require_cpp_condition libx265 x265.h "X265_BUILD >= 89"
 enabled libxavs           && require libxavs "stdint.h xavs.h" xavs_encoder_encode "-lxavs $pthreads_extralibs $libm_extralibs"
 enabled libxavs2          && require_pkg_config libxavs2 "xavs2 >= 1.3.0" "stdint.h xavs2.h" xavs2_api_get
+enabled libxcam           && { check_pkg_config libxcam "libxcam >= 1.4.0" "capi/xcam_handle.h" xcam_create_handle ||
+                               die "ERROR: libXCam must be installed and version must be >= 1.4.0"; }
 enabled libxvid           && require libxvid xvid.h xvid_global -lxvidcore
 enabled libzimg           && require_pkg_config libzimg "zimg >= 2.7.0" zimg.h zimg_get_api_version
 enabled libzmq            && require_pkg_config libzmq "libzmq >= 4.2.1" zmq.h zmq_ctx_new
@@ -6967,6 +6979,7 @@ if enabled vaapi; then
     check_type "va/va.h va/va_enc_jpeg.h" "VAEncPictureParameterBufferJPEG"
     check_type "va/va.h va/va_enc_vp8.h"  "VAEncPictureParameterBufferVP8"
     check_type "va/va.h va/va_enc_vp9.h"  "VAEncPictureParameterBufferVP9"
+    check_type "va/va.h va/va_enc_av1.h"  "VAEncPictureParameterBufferAV1"
 fi
 
 if enabled_all opencl libdrm ; then
@@ -7097,6 +7110,8 @@ check_disable_warning -Wno-pointer-sign
 check_disable_warning -Wno-unused-const-variable
 check_disable_warning -Wno-bool-operation
 check_disable_warning -Wno-char-subscripts
+#this option is for supress redundant-decls warning in compile libtorch
+check_disable_warning -Wno-redundant-decls
 
 check_disable_warning_headers(){
     warning_flag=-W${1#-Wno-}
