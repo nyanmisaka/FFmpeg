@@ -127,6 +127,10 @@ struct AVHWFramesInternal {
      * frame context when trying to allocate in the derived context.
      */
     int source_allocation_map_flags;
+    /**
+     * Internal reference, unreferenced at frame context destruction.
+     */
+    AVBufferRef *internal_ref;
 };
 
 typedef struct HWMapDescriptor {

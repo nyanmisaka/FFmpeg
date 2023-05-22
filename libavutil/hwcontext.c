@@ -238,6 +238,7 @@ static void hwframe_ctx_free(void *opaque, uint8_t *data)
     av_buffer_unref(&ctx->internal->source_frames);
 
     av_buffer_unref(&ctx->device_ref);
+    av_buffer_unref(&ctx->internal->internal_ref);
 
     av_freep(&ctx->hwctx);
     av_freep(&ctx->internal->priv);
