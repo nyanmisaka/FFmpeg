@@ -463,6 +463,11 @@ enum AVPixelFormat {
     AV_PIX_FMT_XV48BE,      ///< packed XVYU 4:4:4, 64bpp, big-endian, variant of Y416 where alpha channel is left undefined
     AV_PIX_FMT_XV48LE,      ///< packed XVYU 4:4:4, 64bpp, little-endian, variant of Y416 where alpha channel is left undefined
 
+    /**
+     * HW acceleration through AMF. data[0] contain AMFSurface pointer
+     */
+    AV_PIX_FMT_AMF_SURFACE,
+
     AV_PIX_FMT_NB         ///< number of pixel formats, DO NOT USE THIS if you want to link with shared libav* because the number of formats might differ between versions
 };
 
