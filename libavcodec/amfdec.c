@@ -51,6 +51,21 @@ const enum AVPixelFormat amf_dec_pix_fmts[] = {
     AV_PIX_FMT_NONE
 };
 
+static enum AVPixelFormat amf_sw_to_hw_format(enum AVPixelFormat pix_fmt)
+{
+    switch (pix_fmt) {
+    case AV_PIX_FMT_YUV420P:
+    case AV_PIX_FMT_YUVJ420P:
+        return AV_PIX_FMT_NV12;
+    case AV_PIX_FMT_YUV420P10:
+        return AV_PIX_FMT_P010;
+    case AV_PIX_FMT_YUV420P12:
+        return AV_PIX_FMT_P012;
+    default:
+        return AV_PIX_FMT_NONE;
+    }
+}
+
 static const AVCodecHWConfigInternal *const amf_hw_configs[] = {
     &(const AVCodecHWConfigInternal) {
         .public = {
@@ -273,29 +288,16 @@ static int amf_decode_init(AVCodecContext *avctx)
         AMF_GOTO_FAIL_IF_FALSE(avctx, ret == 0, ret, "Failed to create  hardware device context (AMF) : %s\n", av_err2str(ret));
     }
     if ((ret = amf_init_decoder(avctx)) == 0) {
-        AMFVariantStruct    format_var = {0};
-        //ret = ctx->decoder->pVtbl->GetProperty(ctx->decoder, AMF_VIDEO_DECODER_OUTPUT_FORMAT, &format_var);
-        //AMF_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR(EINVAL), "Failed to get output format (AMF) : %d\n", ret);
+        enum AVPixelFormat sw_pix_fmt = AV_PIX_FMT_NONE;
 
-        av_log(avctx, AV_LOG_WARNING, "avctx->pix_fmt: %s", av_get_pix_fmt_name(avctx->pix_fmt));
-
-        //if (format_var.int64Value == AMF_SURFACE_UNKNOWN) {
-            switch (avctx->pix_fmt) {
-            case AV_PIX_FMT_YUV420P10:
-                format_var.int64Value = AMF_SURFACE_P010;
-                break;
-            case AV_PIX_FMT_YUV420P12:
-                format_var.int64Value = AMF_SURFACE_P012;
-                break;
-            case AV_PIX_FMT_YUV420P:
-            case AV_PIX_FMT_YUVJ420P:
-                format_var.int64Value = AMF_SURFACE_NV12;
-                break;
-            default:
-                ret = AVERROR(ENOSYS);
-                goto fail;
-            }
-        //}
+        sw_pix_fmt = amf_sw_to_hw_format(avctx->pix_fmt);
+        if (sw_pix_fmt == AV_PIX_FMT_NONE) {
+            ret = AVERROR(ENOSYS);
+            goto fail;
+        }
+        av_log(avctx, AV_LOG_WARNING, "pix_fmt: %s | sw_pix_fmt: %s\n",
+               av_get_pix_fmt_name(avctx->pix_fmt),
+               av_get_pix_fmt_name(sw_pix_fmt));
 
         if (avctx->hw_frames_ctx) {
             // this values should be set for avcodec_open2
@@ -304,11 +306,10 @@ static int amf_decode_init(AVCodecContext *avctx)
                 avctx->coded_width = 1280;
             if (!avctx->coded_height)
                 avctx->coded_height = 720;
-            ret = amf_init_frames_context(avctx, av_amf_to_av_format(format_var.int64Value), avctx->coded_width, avctx->coded_height);
+            ret = amf_init_frames_context(avctx, sw_pix_fmt, avctx->coded_width, avctx->coded_height);
             AMF_GOTO_FAIL_IF_FALSE(avctx, ret == 0, ret, "Failed to init frames contextontext (AMF) : %s\n", av_err2str(ret));
-        }
-        else
-            avctx->pix_fmt = av_amf_to_av_format(format_var.int64Value);
+        } else
+            avctx->pix_fmt = sw_pix_fmt;
 
         return 0;
     }
@@ -353,7 +354,7 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, AMFSurface* surface,
         if (ret < 0)
             return ret;
 
-        avctx->sw_pix_fmt = avctx->pix_fmt;
+        avctx->sw_pix_fmt = amf_sw_to_hw_format(avctx->pix_fmt);
 
         ret = ff_attach_decode_data(frame);
         if (ret < 0)
