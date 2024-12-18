@@ -24,7 +24,7 @@
 #include "codec_internal.h"
 #include <AMF/components/PreAnalysis.h>
 
-#define OFFSET(x) offsetof(AmfContext, x)
+#define OFFSET(x) offsetof(AMFEncoderContext, x)
 #define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
 
 static const AVOption options[] = {
@@ -193,7 +193,7 @@ static av_cold int amf_encode_init_h264(AVCodecContext *avctx)
 {
     int                              ret = 0;
     AMF_RESULT                       res = AMF_OK;
-    AmfContext                      *ctx = avctx->priv_data;
+    AMFEncoderContext               *ctx = avctx->priv_data;
     AMFVariantStruct                 var = { 0 };
     amf_int64                        profile = 0;
     amf_int64                        profile_level = 0;
@@ -602,7 +602,7 @@ const FFCodec ff_h264_amf_encoder = {
     .init           = amf_encode_init_h264,
     FF_CODEC_RECEIVE_PACKET_CB(ff_amf_receive_packet),
     .close          = ff_amf_encode_close,
-    .priv_data_size = sizeof(AmfContext),
+    .priv_data_size = sizeof(AMFEncoderContext),
     .p.priv_class   = &h264_amf_class,
     .defaults       = defaults,
     .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HARDWARE |
