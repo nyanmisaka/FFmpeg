@@ -277,12 +277,27 @@ static int amf_decode_init(AVCodecContext *avctx)
         ret = ctx->decoder->pVtbl->GetProperty(ctx->decoder, AMF_VIDEO_DECODER_OUTPUT_FORMAT, &format_var);
         AMF_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR(EINVAL), "Failed to get output format (AMF) : %d\n", ret);
 
-        if(avctx->hw_frames_ctx)
-        {
+        if (format_var.int64Value == AMF_SURFACE_UNKNOWN) {
+            switch (avctx->pix_fmt) {
+            case AV_PIX_FMT_YUV420P10:
+                format_var.int64Value = AMF_SURFACE_P010;
+                break;
+            case AV_PIX_FMT_YUV420P12:
+                format_var.int64Value = AMF_SURFACE_P012;
+                break;
+            case AV_PIX_FMT_YUV420P:
+            case AV_PIX_FMT_YUVJ420P:
+                format_var.int64Value = AMF_SURFACE_NV12;
+                break;
+            default:
+                ret = AVERROR(ENOSYS);
+                goto fail;
+            }
+        }
+
+        if (avctx->hw_frames_ctx) {
             // this values should be set for avcodec_open2
             // will be updated after header decoded if not true.
-            if(format_var.int64Value == AMF_SURFACE_UNKNOWN)
-                format_var.int64Value = AMF_SURFACE_NV12; // for older drivers
             if (!avctx->coded_width)
                 avctx->coded_width = 1280;
             if (!avctx->coded_height)

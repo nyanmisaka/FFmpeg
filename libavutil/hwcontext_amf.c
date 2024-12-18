@@ -111,6 +111,7 @@ const FormatMap format_map[] =
     { AV_PIX_FMT_YUV420P,       AMF_SURFACE_YUV420P },
     { AV_PIX_FMT_YUYV422,       AMF_SURFACE_YUY2 },
     { AV_PIX_FMT_P010,          AMF_SURFACE_P010 },
+    { AV_PIX_FMT_P012,          AMF_SURFACE_P012 },
 };
 
 enum AMF_SURFACE_FORMAT av_av_to_amf_format(enum AVPixelFormat fmt)
