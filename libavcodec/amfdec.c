@@ -95,6 +95,7 @@ static int amf_init_decoder(AVCodecContext *avctx)
     AMFBuffer               *buffer;
     amf_int64               color_profile;
     int                     pool_size = 36;
+    enum AVPixelFormat sw_pix_fmt = AV_PIX_FMT_NONE;
 
     ctx->drain = 0;
     ctx->resolution_changed = 0;
@@ -208,7 +209,12 @@ static int amf_init_decoder(AVCodecContext *avctx)
         ctx->surface_pool_size = 100;
 
     AMF_ASSIGN_PROPERTY_INT64(res, ctx->decoder, AMF_VIDEO_DECODER_SURFACE_POOL_SIZE, ctx->surface_pool_size);
-    res = ctx->decoder->pVtbl->Init(ctx->decoder, AMF_SURFACE_UNKNOWN, avctx->width, avctx->height);
+
+    sw_pix_fmt = amf_sw_to_hw_format(avctx->pix_fmt);
+    if (sw_pix_fmt == AV_PIX_FMT_NONE)
+        return AVERROR(ENOSYS);
+
+    res = ctx->decoder->pVtbl->Init(ctx->decoder, av_av_to_amf_format(sw_pix_fmt), avctx->width, avctx->height);
     if (res != AMF_OK) {
         av_log(avctx, AV_LOG_ERROR, "Decoder initialization failed with error %d\n", res);
         return AVERROR(EINVAL);
