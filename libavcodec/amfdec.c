@@ -274,10 +274,12 @@ static int amf_decode_init(AVCodecContext *avctx)
     }
     if ((ret = amf_init_decoder(avctx)) == 0) {
         AMFVariantStruct    format_var = {0};
-        ret = ctx->decoder->pVtbl->GetProperty(ctx->decoder, AMF_VIDEO_DECODER_OUTPUT_FORMAT, &format_var);
-        AMF_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR(EINVAL), "Failed to get output format (AMF) : %d\n", ret);
+        //ret = ctx->decoder->pVtbl->GetProperty(ctx->decoder, AMF_VIDEO_DECODER_OUTPUT_FORMAT, &format_var);
+        //AMF_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR(EINVAL), "Failed to get output format (AMF) : %d\n", ret);
 
-        if (format_var.int64Value == AMF_SURFACE_UNKNOWN) {
+        av_log(avctx, AV_LOG_WARNING, "avctx->pix_fmt: %s", av_get_pix_fmt_name(avctx->pix_fmt));
+
+        //if (format_var.int64Value == AMF_SURFACE_UNKNOWN) {
             switch (avctx->pix_fmt) {
             case AV_PIX_FMT_YUV420P10:
                 format_var.int64Value = AMF_SURFACE_P010;
@@ -293,7 +295,7 @@ static int amf_decode_init(AVCodecContext *avctx)
                 ret = AVERROR(ENOSYS);
                 goto fail;
             }
-        }
+        //}
 
         if (avctx->hw_frames_ctx) {
             // this values should be set for avcodec_open2
