@@ -100,15 +100,21 @@ static int amf_init_decoder(AVCodecContext *avctx)
     ctx->drain = 0;
     ctx->resolution_changed = 0;
 
+    sw_pix_fmt = amf_sw_to_hw_format(avctx->pix_fmt);
+    if (sw_pix_fmt == AV_PIX_FMT_NONE)
+        return AVERROR(ENOSYS);
+
     switch (avctx->codec->id) {
         case AV_CODEC_ID_H264:
             codec_id = AMFVideoDecoderUVD_H264_AVC;
             break;
-        case AV_CODEC_ID_HEVC: {
-            codec_id = AMFVideoDecoderHW_H265_HEVC;
-        } break;
+        case AV_CODEC_ID_HEVC:
+            codec_id = sw_pix_fmt == AV_PIX_FMT_P010
+                ? AMFVideoDecoderHW_H265_MAIN10 /* backward compat */ : AMFVideoDecoderHW_H265_HEVC;
+            break;
         case AV_CODEC_ID_AV1:
-            codec_id = AMFVideoDecoderHW_AV1;
+            codec_id = sw_pix_fmt == AV_PIX_FMT_P012
+                ? AMFVideoDecoderHW_AV1_12BIT /* backward compat */ : AMFVideoDecoderHW_AV1;
             break;
         default:
             break;
