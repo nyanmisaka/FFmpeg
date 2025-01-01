@@ -291,30 +291,40 @@ static int amf_decode_init(AVCodecContext *avctx)
     if ((ret = amf_init_decoder(avctx)) == 0) {
         AVHWDeviceContext     *hw_device_ctx = (AVHWDeviceContext*)ctx->device_ctx_ref->data;
         AVAMFDeviceContext    *amf_device_ctx = (AVAMFDeviceContext*)hw_device_ctx->hwctx;
-        AMFVariantStruct    format_var = {0};
+        enum AVPixelFormat    surf_pix_fmt = AV_PIX_FMT_NONE;
+
         if(amf_legacy_driver_no_bitness_detect(amf_device_ctx)){
             // if bitness detection is not supported in legacy driver use format from container
-            format_var.type = AMF_VARIANT_INT64;
-            format_var.int64Value = av_av_to_amf_format(avctx->pix_fmt);
+            switch (avctx->pix_fmt) {
+            case AV_PIX_FMT_YUV420P:
+            case AV_PIX_FMT_YUVJ420P:
+                surf_pix_fmt = AV_PIX_FMT_NV12; break;
+            case AV_PIX_FMT_YUV420P10:
+                surf_pix_fmt = AV_PIX_FMT_P010; break;
+            }
         }else{
+            AMFVariantStruct format_var = {0};
+
             ret = ctx->decoder->pVtbl->GetProperty(ctx->decoder, AMF_VIDEO_DECODER_OUTPUT_FORMAT, &format_var);
             AMF_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR(EINVAL), "Failed to get output format (AMF) : %d\n", ret);
+
+            surf_pix_fmt = av_amf_to_av_format(format_var.int64Value);
         }
         if(avctx->hw_frames_ctx)
         {
             // this values should be set for avcodec_open2
             // will be updated after header decoded if not true.
-            if(format_var.int64Value == AMF_SURFACE_UNKNOWN)
-                format_var.int64Value = AMF_SURFACE_NV12; // for older drivers
+            if(surf_pix_fmt == AV_PIX_FMT_NONE)
+                surf_pix_fmt = AV_PIX_FMT_NV12; // for older drivers
             if (!avctx->coded_width)
                 avctx->coded_width = 1280;
             if (!avctx->coded_height)
                 avctx->coded_height = 720;
-            ret = amf_init_frames_context(avctx, av_amf_to_av_format(format_var.int64Value), avctx->coded_width, avctx->coded_height);
-            AMF_GOTO_FAIL_IF_FALSE(avctx, ret == 0, ret, "Failed to init frames contextontext (AMF) : %s\n", av_err2str(ret));
+            ret = amf_init_frames_context(avctx, surf_pix_fmt, avctx->coded_width, avctx->coded_height);
+            AMF_GOTO_FAIL_IF_FALSE(avctx, ret == 0, ret, "Failed to init frames context (AMF) : %s\n", av_err2str(ret));
         }
         else
-            avctx->pix_fmt = av_amf_to_av_format(format_var.int64Value);
+            avctx->pix_fmt = surf_pix_fmt;
 
         return 0;
     }
