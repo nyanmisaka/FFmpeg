@@ -222,13 +222,21 @@ static int cuda_transfer_get_formats(AVHWFramesContext *ctx,
                                      enum AVPixelFormat **formats)
 {
     enum AVPixelFormat *fmts;
+    int n = 2;
 
-    fmts = av_malloc_array(2, sizeof(*fmts));
+#if CONFIG_VULKAN
+    n++;
+#endif
+    fmts = av_malloc_array(n, sizeof(*fmts));
     if (!fmts)
         return AVERROR(ENOMEM);
 
-    fmts[0] = ctx->sw_format;
-    fmts[1] = AV_PIX_FMT_NONE;
+    n = 0;
+    fmts[n++] = ctx->sw_format;
+#if CONFIG_VULKAN
+    fmts[n++] = AV_PIX_FMT_VULKAN;
+#endif
+    fmts[n++] = AV_PIX_FMT_NONE;
 
     *formats = fmts;
 
