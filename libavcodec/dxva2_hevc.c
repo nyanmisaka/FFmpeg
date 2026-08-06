@@ -32,12 +32,12 @@
 #define MAX_SLICES 256
 
 struct hevc_dxva2_picture_context {
-    DXVA_PicParams_HEVC   pp;
-    DXVA_Qmatrix_HEVC     qm;
-    unsigned              slice_count;
-    DXVA_Slice_HEVC_Short slice_short[MAX_SLICES];
-    const uint8_t         *bitstream;
-    unsigned              bitstream_size;
+    DXVA_PicParams_HEVC_RangeExt ppext;
+    DXVA_Qmatrix_HEVC            qm;
+    unsigned                     slice_count;
+    DXVA_Slice_HEVC_Short        slice_short[MAX_SLICES];
+    const uint8_t                *bitstream;
+    unsigned                     bitstream_size;
 };
 
 static void fill_picture_entry(DXVA_PicEntry_HEVC *pic,
@@ -58,8 +58,9 @@ static int get_refpic_index(const DXVA_PicParams_HEVC *pp, int surface_index)
 }
 
 int ff_dxva2_hevc_fill_picture_parameters(const AVCodecContext *avctx, AVDXVAContext *ctx,
-                                    DXVA_PicParams_HEVC *pp)
+                                          DXVA_PicParams_HEVC_RangeExt *ppext)
 {
+    DXVA_PicParams_HEVC *pp = &ppext->params;
     const HEVCContext *h = avctx->priv_data;
     const HEVCLayerContext *l = &h->layers[h->cur_layer];
     const HEVCFrame *current_picture = h->cur_frame;
@@ -67,7 +68,7 @@ int ff_dxva2_hevc_fill_picture_parameters(const AVCodecContext *avctx, AVDXVACon
     const HEVCSPS *sps = pps->sps;
     int i, j;
 
-    memset(pp, 0, sizeof(*pp));
+    memset(ppext, 0, sizeof(*ppext));
 
     pp->PicWidthInMinCbsY  = sps->min_cb_width;
     pp->PicHeightInMinCbsY = sps->min_cb_height;
@@ -383,7 +384,7 @@ static int dxva2_hevc_start_frame(AVCodecContext *avctx,
     av_assert0(ctx_pic);
 
     /* Fill up DXVA_PicParams_HEVC */
-    if (ff_dxva2_hevc_fill_picture_parameters(avctx, ctx, &ctx_pic->pp) < 0)
+    if (ff_dxva2_hevc_fill_picture_parameters(avctx, ctx, &ctx_pic->ppext) < 0)
         return -1;
 
     /* Fill up DXVA_Qmatrix_HEVC */
@@ -422,14 +423,14 @@ static int dxva2_hevc_end_frame(AVCodecContext *avctx)
 {
     HEVCContext *h = avctx->priv_data;
     struct hevc_dxva2_picture_context *ctx_pic = h->cur_frame->hwaccel_picture_private;
-    int scale = ctx_pic->pp.dwCodingParamToolFlags & 1;
+    int scale = ctx_pic->ppext.params.dwCodingParamToolFlags & 1;
     int ret;
 
     if (ctx_pic->slice_count <= 0 || ctx_pic->bitstream_size <= 0)
         return -1;
 
     ret = ff_dxva2_common_end_frame(avctx, h->cur_frame->f,
-                                    &ctx_pic->pp, sizeof(ctx_pic->pp),
+                                    &ctx_pic->ppext.params, sizeof(ctx_pic->ppext.params),
                                     scale ? &ctx_pic->qm : NULL, scale ? sizeof(ctx_pic->qm) : 0,
                                     commit_bitstream_and_slice_buffer);
     return ret;
