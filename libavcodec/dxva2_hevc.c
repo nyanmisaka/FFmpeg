@@ -28,6 +28,7 @@
 #include "hevc/data.h"
 #include "hevc/hevcdec.h"
 #include "hwaccel_internal.h"
+#include "h265_profile_level.h"
 
 #define MAX_SLICES 256
 
@@ -55,6 +56,78 @@ static int get_refpic_index(const DXVA_PicParams_HEVC *pp, int surface_index)
           return i;
     }
     return 0xff;
+}
+
+static int ptl_convert(const PTLCommon *general_ptl, H265RawProfileTierLevel *h265_raw_ptl)
+{
+    memcpy(h265_raw_ptl->general_profile_compatibility_flag,
+           general_ptl->profile_compatibility_flag,
+           32 * sizeof(uint8_t));
+
+#define copy_field(name) h265_raw_ptl->general_ ## name = general_ptl->name
+    copy_field(profile_space);
+    copy_field(tier_flag);
+    copy_field(profile_idc);
+    copy_field(progressive_source_flag);
+    copy_field(interlaced_source_flag);
+    copy_field(non_packed_constraint_flag);
+    copy_field(frame_only_constraint_flag);
+    copy_field(max_12bit_constraint_flag);
+    copy_field(max_10bit_constraint_flag);
+    copy_field(max_8bit_constraint_flag);
+    copy_field(max_422chroma_constraint_flag);
+    copy_field(max_420chroma_constraint_flag);
+    copy_field(max_monochrome_constraint_flag);
+    copy_field(intra_constraint_flag);
+    copy_field(one_picture_only_constraint_flag);
+    copy_field(lower_bit_rate_constraint_flag);
+    copy_field(max_14bit_constraint_flag);
+    copy_field(inbld_flag);
+    copy_field(level_idc);
+#undef copy_field
+
+    return 0;
+}
+
+const GUID *ff_dxva2_hevc_parse_rext_profile(AVCodecContext *avctx)
+{
+    const HEVCContext *h = avctx->priv_data;
+    const HEVCSPS *sps = h->pps->sps;
+    const PTL *ptl = &sps->ptl;
+    const PTLCommon *general_ptl = &ptl->general_ptl;
+    const H265ProfileDescriptor *profile;
+    H265RawProfileTierLevel h265_raw_ptl = {0};
+
+    /* convert PTLCommon to H265RawProfileTierLevel */
+    ptl_convert(general_ptl, &h265_raw_ptl);
+
+    profile = ff_h265_get_profile(&h265_raw_ptl);
+    if (!profile) {
+        av_log(avctx, AV_LOG_ERROR, "HEVC profile is not found.\n");
+        return &ff_GUID_NULL;
+    }
+
+    if (!strcmp(profile->name, "Main 12") ||
+        !strcmp(profile->name, "Main 12 Intra"))
+        return &ff_DXVA2_ModeHEVC_VLD_Main12;
+    else if (!strcmp(profile->name, "Main 4:2:2 10") ||
+             !strcmp(profile->name, "Main 4:2:2 10 Intra"))
+        return &ff_DXVA2_ModeHEVC_VLD_Main10_422;
+    else if (!strcmp(profile->name, "Main 4:2:2 12") ||
+             !strcmp(profile->name, "Main 4:2:2 12 Intra"))
+        return &ff_DXVA2_ModeHEVC_VLD_Main12_422;
+    else if (!strcmp(profile->name, "Main 4:4:4") ||
+             !strcmp(profile->name, "Main 4:4:4 Intra"))
+        return &ff_DXVA2_ModeHEVC_VLD_Main_444;
+    else if (!strcmp(profile->name, "Main 4:4:4 10") ||
+             !strcmp(profile->name, "Main 4:4:4 10 Intra"))
+        return &ff_DXVA2_ModeHEVC_VLD_Main10_444;
+    else if (!strcmp(profile->name, "Main 4:4:4 12") ||
+             !strcmp(profile->name, "Main 4:4:4 12 Intra"))
+        return &ff_DXVA2_ModeHEVC_VLD_Main12_444;
+
+    av_log(avctx, AV_LOG_ERROR, "Unsupported HEVC RExt profile: %s\n", profile->name);
+    return &ff_GUID_NULL;
 }
 
 int ff_dxva2_hevc_fill_picture_parameters(const AVCodecContext *avctx, AVDXVAContext *ctx,
@@ -206,6 +279,32 @@ int ff_dxva2_hevc_fill_picture_parameters(const AVCodecContext *avctx, AVDXVACon
     DO_REF_LIST(LT_CURR, RefPicSetLtCurr);
 
     pp->StatusReportFeedbackNumber = 1 + DXVA_CONTEXT_REPORT_ID(avctx, ctx)++;
+
+    if (sps->range_extension) {
+        ppext->transform_skip_rotation_enabled_flag    = sps->transform_skip_rotation_enabled;
+        ppext->transform_skip_context_enabled_flag     = sps->transform_skip_context_enabled;
+        ppext->implicit_rdpcm_enabled_flag             = sps->implicit_rdpcm_enabled;
+        ppext->explicit_rdpcm_enabled_flag             = sps->explicit_rdpcm_enabled;
+        ppext->extended_precision_processing_flag      = sps->extended_precision_processing;
+        ppext->intra_smoothing_disabled_flag           = sps->intra_smoothing_disabled;
+        ppext->persistent_rice_adaptation_enabled_flag = sps->persistent_rice_adaptation_enabled;
+        ppext->high_precision_offsets_enabled_flag     = sps->high_precision_offsets_enabled;
+        ppext->cabac_bypass_alignment_enabled_flag     = sps->cabac_bypass_alignment_enabled;
+    }
+    if (pps->pps_range_extensions_flag) {
+        ppext->cross_component_prediction_enabled_flag = pps->cross_component_prediction_enabled_flag;
+        ppext->chroma_qp_offset_list_enabled_flag      = pps->chroma_qp_offset_list_enabled_flag;
+
+        ppext->diff_cu_chroma_qp_offset_depth            = pps->diff_cu_chroma_qp_offset_depth;
+        ppext->log2_sao_offset_scale_luma                = pps->log2_sao_offset_scale_luma;
+        ppext->log2_sao_offset_scale_chroma              = pps->log2_sao_offset_scale_chroma;
+        ppext->log2_max_transform_skip_block_size_minus2 = pps->log2_max_transform_skip_block_size - 2;
+        ppext->chroma_qp_offset_list_len_minus1          = pps->chroma_qp_offset_list_len_minus1;
+        for (i = 0; i <= pps->chroma_qp_offset_list_len_minus1; i++) {
+            ppext->cb_qp_offset_list[i] = pps->cb_qp_offset_list[i];
+            ppext->cr_qp_offset_list[i] = pps->cr_qp_offset_list[i];
+        }
+    }
 
     return 0;
 }
@@ -424,13 +523,15 @@ static int dxva2_hevc_end_frame(AVCodecContext *avctx)
     HEVCContext *h = avctx->priv_data;
     struct hevc_dxva2_picture_context *ctx_pic = h->cur_frame->hwaccel_picture_private;
     int scale = ctx_pic->ppext.params.dwCodingParamToolFlags & 1;
+    int rext = avctx->profile == AV_PROFILE_HEVC_REXT;
     int ret;
 
     if (ctx_pic->slice_count <= 0 || ctx_pic->bitstream_size <= 0)
         return -1;
 
     ret = ff_dxva2_common_end_frame(avctx, h->cur_frame->f,
-                                    &ctx_pic->ppext.params, sizeof(ctx_pic->ppext.params),
+                                    &ctx_pic->ppext.params,
+                                    rext ? sizeof(ctx_pic->ppext) : sizeof(ctx_pic->ppext.params),
                                     scale ? &ctx_pic->qm : NULL, scale ? sizeof(ctx_pic->qm) : 0,
                                     commit_bitstream_and_slice_buffer);
     return ret;

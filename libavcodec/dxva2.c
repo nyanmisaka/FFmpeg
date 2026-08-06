@@ -52,7 +52,6 @@ DEFINE_GUID(ff_DXVA2_ModeAV1_VLD_Profile2,0x0c5f2aa1,0xe541,0x4089,0xbb,0x7b,0x9
 DEFINE_GUID(ff_DXVA2_ModeAV1_VLD_12bit_Profile2,0x17127009,0xa00f,0x4ce1,0x99,0x4e,0xbf,0x40,0x81,0xf6,0xf3,0xf0);
 DEFINE_GUID(ff_DXVA2_ModeAV1_VLD_12bit_Profile2_420,0x2d80bed6,0x9cac,0x4835,0x9e,0x91,0x32,0x7b,0xbc,0x4f,0x9e,0xe8);
 DEFINE_GUID(ff_DXVA2_NoEncrypt,          0x1b81beD0, 0xa0c7,0x11d3,0xb9,0x84,0x00,0xc0,0x4f,0x2e,0x73,0xc5);
-DEFINE_GUID(ff_GUID_NULL,                0x00000000, 0x0000,0x0000,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00);
 DEFINE_GUID(ff_IID_IDirectXVideoDecoderService, 0xfc51a551,0xd5e7,0x11d9,0xaf,0x55,0x00,0x05,0x4e,0x43,0xff,0x02);
 
 typedef struct dxva_mode {
@@ -73,6 +72,8 @@ static const int prof_h264_high[]    = {AV_PROFILE_H264_CONSTRAINED_BASELINE,
 static const int prof_hevc_main[]    = {AV_PROFILE_HEVC_MAIN,
                                         AV_PROFILE_UNKNOWN};
 static const int prof_hevc_main10[]  = {AV_PROFILE_HEVC_MAIN_10,
+                                        AV_PROFILE_UNKNOWN};
+static const int prof_hevc_rext[]    = {AV_PROFILE_HEVC_REXT,
                                         AV_PROFILE_UNKNOWN};
 static const int prof_vp9_profile0[] = {AV_PROFILE_VP9_0,
                                         AV_PROFILE_UNKNOWN};
@@ -103,8 +104,14 @@ static const dxva_mode dxva_modes[] = {
     { &ff_DXVA2_ModeVC1_D,           AV_CODEC_ID_WMV3 },
 
     /* HEVC/H.265 */
-    { &ff_DXVA2_ModeHEVC_VLD_Main10, AV_CODEC_ID_HEVC, prof_hevc_main10 },
-    { &ff_DXVA2_ModeHEVC_VLD_Main,   AV_CODEC_ID_HEVC, prof_hevc_main },
+    { &ff_DXVA2_ModeHEVC_VLD_Main10,     AV_CODEC_ID_HEVC, prof_hevc_main10 },
+    { &ff_DXVA2_ModeHEVC_VLD_Main,       AV_CODEC_ID_HEVC, prof_hevc_main },
+    { &ff_DXVA2_ModeHEVC_VLD_Main12,     AV_CODEC_ID_HEVC, prof_hevc_rext },
+    { &ff_DXVA2_ModeHEVC_VLD_Main10_422, AV_CODEC_ID_HEVC, prof_hevc_rext },
+    { &ff_DXVA2_ModeHEVC_VLD_Main12_422, AV_CODEC_ID_HEVC, prof_hevc_rext },
+    { &ff_DXVA2_ModeHEVC_VLD_Main_444,   AV_CODEC_ID_HEVC, prof_hevc_rext },
+    { &ff_DXVA2_ModeHEVC_VLD_Main10_444, AV_CODEC_ID_HEVC, prof_hevc_rext },
+    { &ff_DXVA2_ModeHEVC_VLD_Main12_444, AV_CODEC_ID_HEVC, prof_hevc_rext },
 
     /* VP8/9 */
     { &ff_DXVA2_ModeVP9_VLD_Profile0,       AV_CODEC_ID_VP9, prof_vp9_profile0 },
@@ -220,6 +227,11 @@ static int dxva_check_codec_compatibility(AVCodecContext *avctx, const dxva_mode
         }
         if (!found)
             return 0;
+
+#if CONFIG_HEVC_D3D12VA_HWACCEL || CONFIG_HEVC_D3D11VA_HWACCEL || CONFIG_HEVC_DXVA2_HWACCEL
+        if (avctx->codec_id == AV_CODEC_ID_HEVC && avctx->profile == AV_PROFILE_HEVC_REXT)
+            return IsEqualGUID(ff_dxva2_hevc_parse_rext_profile(avctx), mode->guid);
+#endif
     }
 
     return 1;
