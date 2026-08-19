@@ -2883,16 +2883,44 @@ static void try_export_flags(AVHWFramesContext *hwfc,
     }
 }
 
+/* Computes the external memory handle types for the frame context. */
+static void get_export_handle_types(AVHWFramesContext *hwfc,
+                                    VkExternalMemoryHandleTypeFlags *comp_handle_types,
+                                    VkExternalMemoryHandleTypeFlags *export_types)
+{
+    VulkanDevicePriv *p = hwfc->device_ctx->hwctx;
+    av_unused AVVulkanFramesContext *hwctx = &((VulkanFramesPriv *)hwfc->hwctx)->p;
+
+    *comp_handle_types = 0x0;
+    *export_types = 0x0;
+
+#ifdef _WIN32
+    if (p->vkctx.extensions & FF_VK_EXT_EXTERNAL_WIN32_MEMORY)
+        try_export_flags(hwfc, comp_handle_types, export_types, IsWindows8OrGreater()
+                             ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT
+                             : VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT);
+#else
+    if ((p->vkctx.extensions & FF_VK_EXT_EXTERNAL_FD_MEMORY) &&
+        (hwctx->tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT))
+        try_export_flags(hwfc, comp_handle_types, export_types,
+                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT);
+
+    if (p->vkctx.extensions & FF_VK_EXT_EXTERNAL_DMABUF_MEMORY &&
+        hwctx->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+        try_export_flags(hwfc, comp_handle_types, export_types,
+                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+#endif
+}
+
 static AVBufferRef *vulkan_pool_alloc(void *opaque, size_t size)
 {
     int err;
     AVVkFrame *f;
     AVBufferRef *avbuf = NULL;
     AVHWFramesContext *hwfc = opaque;
-    VulkanDevicePriv *p = hwfc->device_ctx->hwctx;
     VulkanFramesPriv *fp = hwfc->hwctx;
     AVVulkanFramesContext *hwctx = &fp->p;
-    VkExternalMemoryHandleTypeFlags e = 0x0;
+    VkExternalMemoryHandleTypeFlags e;
     VkExportMemoryAllocateInfo eminfo[AV_NUM_DATA_POINTERS];
 
     VkExternalMemoryImageCreateInfo eiinfo = {
@@ -2900,22 +2928,7 @@ static AVBufferRef *vulkan_pool_alloc(void *opaque, size_t size)
         .pNext       = hwctx->create_pnext,
     };
 
-#ifdef _WIN32
-    if (p->vkctx.extensions & FF_VK_EXT_EXTERNAL_WIN32_MEMORY)
-        try_export_flags(hwfc, &eiinfo.handleTypes, &e, IsWindows8OrGreater()
-                             ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT
-                             : VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT);
-#else
-    if ((p->vkctx.extensions & FF_VK_EXT_EXTERNAL_FD_MEMORY) &&
-        (hwctx->tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT))
-        try_export_flags(hwfc, &eiinfo.handleTypes, &e,
-                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT);
-
-    if (p->vkctx.extensions & FF_VK_EXT_EXTERNAL_DMABUF_MEMORY &&
-        hwctx->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
-        try_export_flags(hwfc, &eiinfo.handleTypes, &e,
-                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
-#endif
+    get_export_handle_types(hwfc, &eiinfo.handleTypes, &e);
 
     for (int i = 0; i < av_pix_fmt_count_planes(hwfc->sw_format); i++) {
         eminfo[i].sType       = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
@@ -3081,9 +3094,16 @@ static int vulkan_host_transfer_usable(AVHWFramesContext *hwfc)
     }
 
     if (!p->vkctx.host_image_props.identicalMemoryTypeRequirements) {
+        int index;
+        VkExternalMemoryHandleTypeFlags e;
+        VkExternalMemoryImageCreateInfo eiinfo = {
+            .sType       = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+            .pNext       = hwctx->create_pnext,
+        };
+        get_export_handle_types(hwfc, &eiinfo.handleTypes, &e);
         VkImageCreateInfo create_info = {
             .sType       = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .pNext       = hwctx->create_pnext,
+            .pNext       = eiinfo.handleTypes ? &eiinfo : hwctx->create_pnext,
             .imageType   = VK_IMAGE_TYPE_2D,
             .format      = hwctx->format[0],
             .extent      = { hwfc->width, hwfc->height, 1 },
@@ -3109,7 +3129,17 @@ static int vulkan_host_transfer_usable(AVHWFramesContext *hwfc)
         };
 
         vk->GetDeviceImageMemoryRequirements(dev_hwctx->act_dev, &req_info, &req);
-        if (!req.memoryRequirements.memoryTypeBits) {
+        /* Check that alloc_bind_mem() will find a compatible memory type. */
+        VkMemoryPropertyFlags req_flags = hwctx->tiling == VK_IMAGE_TILING_LINEAR ?
+                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT :
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        for (index = 0; index < p->mprops.memoryTypeCount; index++) {
+            if (!(req.memoryRequirements.memoryTypeBits & (1U << index)))
+                continue;
+            if ((p->mprops.memoryTypes[index].propertyFlags & req_flags) == req_flags)
+                break;
+        }
+        if (index == p->mprops.memoryTypeCount) {
             av_log(hwfc, AV_LOG_VERBOSE, "Disabling host image transfers: "
                    "no compatible memory type\n");
             return 0;
