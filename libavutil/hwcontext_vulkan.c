@@ -3075,8 +3075,12 @@ static int vulkan_host_transfer_usable(AVHWFramesContext *hwfc)
         /* The driver is free to pick any modifier from the list, so all of
          * them have to be compatible. */
         for (int j = 0; j < nb_mods; j++) {
+            VkHostImageCopyDevicePerformanceQueryEXT perf = {
+                .sType = VK_STRUCTURE_TYPE_HOST_IMAGE_COPY_DEVICE_PERFORMANCE_QUERY_EXT,
+            };
             VkImageFormatProperties2 props = {
                 .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
+                .pNext = &perf,
             };
 
             if (has_mods)
@@ -3088,6 +3092,13 @@ static int vulkan_host_transfer_usable(AVHWFramesContext *hwfc)
                 av_log(hwfc, AV_LOG_VERBOSE, "Disabling host image transfers: "
                        "format %i is not supported: %s\n",
                        pinfo.format, ff_vk_ret2str(ret));
+                return 0;
+            }
+            if (!perf.optimalDeviceAccess) {
+                av_log(hwfc, AV_LOG_VERBOSE, "Disabling host image transfers: "
+                       "format %i has no optimal device access (identical "
+                       "memory layout: %i)\n",
+                       pinfo.format, perf.identicalMemoryLayout);
                 return 0;
             }
         }
