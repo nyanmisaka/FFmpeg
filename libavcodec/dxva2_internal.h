@@ -69,6 +69,14 @@
 #include "avcodec.h"
 #include "internal.h"
 
+DEFINE_GUID(ff_GUID_NULL,                     0x00000000, 0x0000,0x0000,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00);
+DEFINE_GUID(ff_DXVA2_ModeHEVC_VLD_Main12,     0x1a72925f, 0x0c2c,0x4f15,0x96,0xfb,0xb1,0x7d,0x14,0x73,0x60,0x3f);
+DEFINE_GUID(ff_DXVA2_ModeHEVC_VLD_Main10_422, 0x0bac4fe5, 0x1532,0x4429,0xa8,0x54,0xf8,0x4d,0xe0,0x49,0x53,0xdb);
+DEFINE_GUID(ff_DXVA2_ModeHEVC_VLD_Main12_422, 0x55bcac81, 0xf311,0x4093,0xa7,0xd0,0x1c,0xbc,0x0b,0x84,0x9b,0xee);
+DEFINE_GUID(ff_DXVA2_ModeHEVC_VLD_Main_444,   0x4008018f, 0xf537,0x4b36,0x98,0xcf,0x61,0xaf,0x8a,0x2c,0x1a,0x33);
+DEFINE_GUID(ff_DXVA2_ModeHEVC_VLD_Main10_444, 0x0dabeffa, 0x4458,0x4602,0xbc,0x03,0x07,0x95,0x65,0x9d,0x61,0x7c);
+DEFINE_GUID(ff_DXVA2_ModeHEVC_VLD_Main12_444, 0x9798634d, 0xfe9d,0x48e5,0xb4,0xda,0xdb,0xec,0x45,0xb3,0xdf,0x01);
+
 typedef void DECODER_BUFFER_DESC;
 
 typedef union {
@@ -172,9 +180,11 @@ void ff_dxva2_h264_fill_picture_parameters(const AVCodecContext *avctx, AVDXVACo
 void ff_dxva2_h264_fill_scaling_lists(const AVCodecContext *avctx, AVDXVAContext *ctx, DXVA_Qmatrix_H264 *qm);
 
 #if CONFIG_HEVC_D3D12VA_HWACCEL || CONFIG_HEVC_D3D11VA_HWACCEL || CONFIG_HEVC_D3D11VA2_HWACCEL || CONFIG_HEVC_DXVA2_HWACCEL
-void ff_dxva2_hevc_fill_picture_parameters(const AVCodecContext *avctx, AVDXVAContext *ctx, DXVA_PicParams_HEVC *pp);
+void ff_dxva2_hevc_fill_picture_parameters(const AVCodecContext *avctx, AVDXVAContext *ctx, DXVA_PicParams_HEVC_RangeExt *ppext);
 
 void ff_dxva2_hevc_fill_scaling_lists(const AVCodecContext *avctx, AVDXVAContext *ctx, DXVA_Qmatrix_HEVC *qm);
+
+const GUID *ff_dxva2_hevc_parse_rext_profile(AVCodecContext *avctx);
 #endif
 
 #if CONFIG_VP9_D3D12VA_HWACCEL || CONFIG_VP9_D3D11VA_HWACCEL || CONFIG_VP9_D3D11VA2_HWACCEL || CONFIG_VP9_DXVA2_HWACCEL

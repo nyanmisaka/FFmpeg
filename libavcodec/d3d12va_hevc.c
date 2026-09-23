@@ -33,12 +33,12 @@
 #define MAX_SLICES 256
 
 typedef struct HEVCDecodePictureContext {
-    DXVA_PicParams_HEVC    pp;
-    DXVA_Qmatrix_HEVC      qm;
-    unsigned               slice_count;
-    DXVA_Slice_HEVC_Short  slice_short[MAX_SLICES];
-    const uint8_t         *bitstream;
-    unsigned               bitstream_size;
+    DXVA_PicParams_HEVC_RangeExt ppext;
+    DXVA_Qmatrix_HEVC            qm;
+    unsigned                     slice_count;
+    DXVA_Slice_HEVC_Short        slice_short[MAX_SLICES];
+    const uint8_t               *bitstream;
+    unsigned                     bitstream_size;
 } HEVCDecodePictureContext;
 
 static void fill_slice_short(DXVA_Slice_HEVC_Short *slice, unsigned position, unsigned size)
@@ -65,7 +65,7 @@ static int d3d12va_hevc_start_frame(AVCodecContext *avctx,
 
     ctx->used_mask = 0;
 
-    ff_dxva2_hevc_fill_picture_parameters(avctx, (AVDXVAContext *)ctx, &ctx_pic->pp);
+    ff_dxva2_hevc_fill_picture_parameters(avctx, (AVDXVAContext *)ctx, &ctx_pic->ppext);
 
     ff_dxva2_hevc_fill_scaling_lists(avctx, (AVDXVAContext *)ctx, &ctx_pic->qm);
 
@@ -154,7 +154,8 @@ static int d3d12va_hevc_end_frame(AVCodecContext *avctx)
     HEVCContext              *h       = avctx->priv_data;
     HEVCDecodePictureContext *ctx_pic = h->cur_frame->hwaccel_picture_private;
 
-    int scale = ctx_pic->pp.dwCodingParamToolFlags & 1;
+    int scale = ctx_pic->ppext.params.dwCodingParamToolFlags & 1;
+    int rext  = avctx->profile == AV_PROFILE_HEVC_REXT;
     uint64_t bitstream_size;
 
     if (ctx_pic->slice_count <= 0 || ctx_pic->bitstream_size <= 0)
@@ -163,7 +164,8 @@ static int d3d12va_hevc_end_frame(AVCodecContext *avctx)
     bitstream_size = ctx_pic->bitstream_size +
                      (uint64_t)ctx_pic->slice_count * START_CODE_SIZE;
 
-    return ff_d3d12va_common_end_frame(avctx, h->cur_frame->f, &ctx_pic->pp, sizeof(ctx_pic->pp),
+    return ff_d3d12va_common_end_frame(avctx, h->cur_frame->f, &ctx_pic->ppext.params,
+               rext ? sizeof(ctx_pic->ppext) : sizeof(ctx_pic->ppext.params),
                scale ? &ctx_pic->qm : NULL, scale ? sizeof(ctx_pic->qm) : 0,
                bitstream_size, update_input_arguments);
 }
