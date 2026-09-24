@@ -26,6 +26,7 @@
 #include "libavutil/hwcontext_d3d12va_internal.h"
 #include "hevc/data.h"
 #include "hevc/hevcdec.h"
+#include "h265_profile_level.h"
 #include "dxva2_internal.h"
 #include "d3d12va_decode.h"
 #include <dxva.h>
@@ -170,6 +171,78 @@ static int d3d12va_hevc_end_frame(AVCodecContext *avctx)
                bitstream_size, update_input_arguments);
 }
 
+static int ptl_convert(const PTLCommon *general_ptl, H265RawProfileTierLevel *h265_raw_ptl)
+{
+    memcpy(h265_raw_ptl->general_profile_compatibility_flag,
+           general_ptl->profile_compatibility_flag,
+           32 * sizeof(uint8_t));
+
+#define copy_field(name) h265_raw_ptl->general_ ## name = general_ptl->name
+    copy_field(profile_space);
+    copy_field(tier_flag);
+    copy_field(profile_idc);
+    copy_field(progressive_source_flag);
+    copy_field(interlaced_source_flag);
+    copy_field(non_packed_constraint_flag);
+    copy_field(frame_only_constraint_flag);
+    copy_field(max_12bit_constraint_flag);
+    copy_field(max_10bit_constraint_flag);
+    copy_field(max_8bit_constraint_flag);
+    copy_field(max_422chroma_constraint_flag);
+    copy_field(max_420chroma_constraint_flag);
+    copy_field(max_monochrome_constraint_flag);
+    copy_field(intra_constraint_flag);
+    copy_field(one_picture_only_constraint_flag);
+    copy_field(lower_bit_rate_constraint_flag);
+    copy_field(max_14bit_constraint_flag);
+    copy_field(inbld_flag);
+    copy_field(level_idc);
+#undef copy_field
+
+    return 0;
+}
+
+static const GUID *d3d12va_hevc_parse_rext_profile(AVCodecContext *avctx)
+{
+    const HEVCContext *h = avctx->priv_data;
+    const HEVCSPS *sps = h->pps->sps;
+    const PTL *ptl = &sps->ptl;
+    const PTLCommon *general_ptl = &ptl->general_ptl;
+    const H265ProfileDescriptor *profile;
+    H265RawProfileTierLevel h265_raw_ptl = {0};
+
+    /* convert PTLCommon to H265RawProfileTierLevel */
+    ptl_convert(general_ptl, &h265_raw_ptl);
+
+    profile = ff_h265_get_profile(&h265_raw_ptl);
+    if (!profile) {
+        av_log(avctx, AV_LOG_ERROR, "HEVC profile is not found.\n");
+        return &ff_GUID_NULL;
+    }
+
+    if (!strcmp(profile->name, "Main 12") ||
+        !strcmp(profile->name, "Main 12 Intra"))
+        return &ff_D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN12;
+    else if (!strcmp(profile->name, "Main 4:2:2 10") ||
+             !strcmp(profile->name, "Main 4:2:2 10 Intra"))
+        return &ff_D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10_422;
+    else if (!strcmp(profile->name, "Main 4:2:2 12") ||
+             !strcmp(profile->name, "Main 4:2:2 12 Intra"))
+        return &ff_D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN12_422;
+    else if (!strcmp(profile->name, "Main 4:4:4") ||
+             !strcmp(profile->name, "Main 4:4:4 Intra"))
+        return &ff_D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN_444;
+    else if (!strcmp(profile->name, "Main 4:4:4 10") ||
+             !strcmp(profile->name, "Main 4:4:4 10 Intra"))
+        return &ff_D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10_444;
+    else if (!strcmp(profile->name, "Main 4:4:4 12") ||
+             !strcmp(profile->name, "Main 4:4:4 12 Intra"))
+        return &ff_D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN12_444;
+
+    av_log(avctx, AV_LOG_ERROR, "Unsupported HEVC RExt profile: %s\n", profile->name);
+    return &ff_GUID_NULL;
+}
+
 static av_cold int d3d12va_hevc_decode_init(AVCodecContext *avctx)
 {
     D3D12VADecodeContext *ctx = D3D12VA_DECODE_CONTEXT(avctx);
@@ -179,6 +252,17 @@ static av_cold int d3d12va_hevc_decode_init(AVCodecContext *avctx)
     case AV_PROFILE_HEVC_MAIN_10:
         ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10;
         break;
+
+    case AV_PROFILE_HEVC_REXT:
+        {
+            const GUID *rext_prof = d3d12va_hevc_parse_rext_profile(avctx);
+
+            if (IsEqualGUID(rext_prof, &ff_GUID_NULL))
+                return AVERROR(EINVAL);
+
+            ctx->cfg.DecodeProfile = *rext_prof;
+            break;
+        }
 
     case AV_PROFILE_HEVC_MAIN_STILL_PICTURE:
         if (avctx->hwaccel_flags & AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH) {

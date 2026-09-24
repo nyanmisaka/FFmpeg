@@ -48,7 +48,6 @@ typedef struct D3D12VAFramesContext {
     ID3D12CommandAllocator    *command_allocator;
     ID3D12GraphicsCommandList *command_list;
     AVD3D12VASyncContext       sync_ctx;
-    UINT                       luma_component_size;
     int                        nb_surfaces_used;
 } D3D12VAFramesContext;
 
@@ -70,7 +69,24 @@ static const struct {
 } supported_formats[] = {
     { DXGI_FORMAT_NV12, AV_PIX_FMT_NV12 },
     { DXGI_FORMAT_P010, AV_PIX_FMT_P010 },
+    { DXGI_FORMAT_P016, AV_PIX_FMT_P016 },
+
+    { DXGI_FORMAT_YUY2, AV_PIX_FMT_YUYV422 },
+    { DXGI_FORMAT_Y210, AV_PIX_FMT_Y210 },
+    { DXGI_FORMAT_Y216, AV_PIX_FMT_Y216 },
+
+    { DXGI_FORMAT_AYUV, AV_PIX_FMT_VUYX },
+    { DXGI_FORMAT_Y410, AV_PIX_FMT_XV30 },
+    { DXGI_FORMAT_Y416, AV_PIX_FMT_XV48 },
+
+    { DXGI_FORMAT_B8G8R8A8_UNORM,    AV_PIX_FMT_BGRA },
+    { DXGI_FORMAT_R10G10B10A2_UNORM, AV_PIX_FMT_X2BGR10 },
+
+    // There is no 12bit pixel format defined in DXGI_FORMAT*, use 16bit to compatible
+    // with 12 bit AV_PIX_FMT* formats.
     { DXGI_FORMAT_P016, AV_PIX_FMT_P012 },
+    { DXGI_FORMAT_Y216, AV_PIX_FMT_Y212 },
+    { DXGI_FORMAT_Y416, AV_PIX_FMT_XV36 },
 };
 
 static void d3d12va_default_lock(void *ctx)
@@ -106,15 +122,14 @@ fail:
 }
 
 static int d3d12va_create_staging_buffer_resource(AVHWFramesContext *ctx, D3D12_RESOURCE_STATES states,
-                                                  ID3D12Resource **ppResource, int download)
+                                                  ID3D12Resource **ppResource, UINT64 size, int download)
 {
     AVD3D12VADeviceContext *device_hwctx = ctx->device_ctx->hwctx;
-    D3D12VAFramesContext   *s            = ctx->hwctx;
     D3D12_HEAP_PROPERTIES props = { .Type = download ? D3D12_HEAP_TYPE_READBACK : D3D12_HEAP_TYPE_UPLOAD };
     D3D12_RESOURCE_DESC desc = {
         .Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER,
         .Alignment          = 0,
-        .Width              = s->luma_component_size + (s->luma_component_size >> 1),
+        .Width              = size,
         .Height             = 1,
         .DepthOrArraySize   = 1,
         .MipLevels          = 1,
@@ -144,9 +159,6 @@ static int d3d12va_create_helper_objects(AVHWFramesContext *ctx)
         .Priority = 0,
         .NodeMask = 0,
     };
-
-    s->luma_component_size = FFALIGN(ctx->width * (frames_hwctx->format != DXGI_FORMAT_NV12 ? 2 : 1),
-                                     D3D12_TEXTURE_DATA_PITCH_ALIGNMENT) * ctx->height;
 
     DX_CHECK(ID3D12Device_CreateFence(device_hwctx->device, 0, D3D12_FENCE_FLAG_NONE,
                                       &IID_ID3D12Fence, (void **)&s->sync_ctx.fence));
@@ -445,28 +457,20 @@ static int d3d12va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
     int download = src->format == AV_PIX_FMT_D3D12;
     const AVFrame *frame = download ? src : dst;
     const AVFrame *other = download ? dst : src;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(ctx->sw_format);
+    const int is_planar = !!(desc->flags & AV_PIX_FMT_FLAG_PLANAR);
+    const int nb_planes = av_pix_fmt_count_planes(ctx->sw_format);
 
     AVD3D12VAFrame *f = (AVD3D12VAFrame *)frame->data[0];
     ID3D12Resource *texture = (ID3D12Resource *)f->texture;
 
+    UINT64 staging_size = 0;
     uint8_t *mapped_data;
-    uint8_t *data[4];
-    int linesizes[4];
+    uint8_t *data[AV_NUM_DATA_POINTERS];
+    int linesizes[AV_NUM_DATA_POINTERS] = { 0 };
 
-    D3D12_TEXTURE_COPY_LOCATION staging_y_location  = { 0 };
-    D3D12_TEXTURE_COPY_LOCATION staging_uv_location = { 0 };
-
-    D3D12_TEXTURE_COPY_LOCATION texture_y_location = {
-        .pResource        = texture,
-        .Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        .SubresourceIndex = 0,
-    };
-
-    D3D12_TEXTURE_COPY_LOCATION texture_uv_location = {
-        .pResource        = texture,
-        .Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        .SubresourceIndex = 1,
-    };
+    D3D12_TEXTURE_COPY_LOCATION texture_location[AV_NUM_DATA_POINTERS] = { 0 };
+    D3D12_TEXTURE_COPY_LOCATION staging_location[AV_NUM_DATA_POINTERS] = { 0 };
 
     D3D12_RESOURCE_BARRIER barrier = {
         .Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
@@ -482,6 +486,9 @@ static int d3d12va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
     if (frame->hw_frames_ctx->data != (uint8_t *)ctx || other->format != ctx->sw_format)
         return AVERROR(EINVAL);
 
+    if (is_planar ? (nb_planes > 2) : (nb_planes != 1))
+        return AVERROR(EINVAL);
+
     hwctx->lock(hwctx->lock_ctx);
 
     if (!s->command_queue) {
@@ -490,39 +497,53 @@ static int d3d12va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
             goto fail;
     }
 
-    for (int i = 0; i < 4; i++)
-        linesizes[i] = FFALIGN(frame->width * (frames_hwctx->format != DXGI_FORMAT_NV12 ? 2 : 1),
-                               D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+    for (unsigned i = 0; i < nb_planes; i++) {
+        DXGI_FORMAT staging_format = frames_hwctx->format;
 
-    staging_y_location = (D3D12_TEXTURE_COPY_LOCATION) {
-        .Type      = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-        .PlacedFootprint = {
-            .Offset = 0,
-            .Footprint = {
-                .Format   = frames_hwctx->format != DXGI_FORMAT_NV12 ?
-                                                    DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM,
-                .Width    = ctx->width,
-                .Height   = ctx->height,
-                .Depth    = 1,
-                .RowPitch = linesizes[0],
-            },
-        },
-    };
+        if (is_planar) {
+            switch (desc->comp[0].step) {
+            case 1:
+                staging_format = i ? DXGI_FORMAT_R8G8_UNORM
+                                   : DXGI_FORMAT_R8_UNORM;
+                break;
+            case 2:
+                staging_format = i ? DXGI_FORMAT_R16G16_UNORM
+                                   : DXGI_FORMAT_R16_UNORM;
+                break;
+            default:
+                goto fail;
+            }
+        }
 
-    staging_uv_location = (D3D12_TEXTURE_COPY_LOCATION) {
-        .Type      = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-        .PlacedFootprint = {
-            .Offset = s->luma_component_size,
-            .Footprint = {
-                .Format   = frames_hwctx->format != DXGI_FORMAT_NV12 ?
-                                                    DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM,
-                .Width    = ctx->width  >> 1,
-                .Height   = ctx->height >> 1,
-                .Depth    = 1,
-                .RowPitch = linesizes[0],
+        linesizes[i] = av_image_get_linesize(ctx->sw_format, ctx->width, i);
+        linesizes[i] = FFALIGN(linesizes[i], D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+
+        texture_location[i] = (D3D12_TEXTURE_COPY_LOCATION) {
+            .pResource        = texture,
+            .Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            .SubresourceIndex = i,
+        };
+
+        staging_location[i] = (D3D12_TEXTURE_COPY_LOCATION) {
+            .Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            .PlacedFootprint = {
+                .Offset    = i ? (linesizes[0] * ctx->height) : 0,
+                .Footprint = {
+                    .Format   = staging_format,
+                    .Width    = AV_CEIL_RSHIFT(ctx->width,  i ? desc->log2_chroma_w : 0),
+                    .Height   = AV_CEIL_RSHIFT(ctx->height, i ? desc->log2_chroma_h : 0),
+                    .Depth    = 1,
+                    .RowPitch = linesizes[i],
+                },
             },
-        },
-    };
+        };
+    }
+
+    staging_size = linesizes[0] * ctx->height;
+    if (is_planar) {
+        const int bpp = av_get_padded_bits_per_pixel(desc);
+        staging_size  = (staging_size * bpp) / (desc->comp[0].step << 3);
+    }
 
     DX_CHECK(ID3D12CommandAllocator_Reset(s->command_allocator));
 
@@ -531,23 +552,21 @@ static int d3d12va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
     if (download) {
         if (!s->staging_download_buffer) {
             ret = d3d12va_create_staging_buffer_resource(ctx, D3D12_RESOURCE_STATE_COPY_DEST,
-                                                         &s->staging_download_buffer, 1);
+                                                         &s->staging_download_buffer, staging_size, 1);
             if (ret < 0) {
                 goto fail;
             }
         }
 
-        staging_y_location.pResource = staging_uv_location.pResource = s->staging_download_buffer;
-
         ID3D12GraphicsCommandList_ResourceBarrier(s->command_list, 1, &barrier);
 
-        ID3D12GraphicsCommandList_CopyTextureRegion(s->command_list,
-                                                    &staging_y_location, 0, 0, 0,
-                                                    &texture_y_location, NULL);
+        for (unsigned i = 0; i < nb_planes; i++) {
+            staging_location[i].pResource = s->staging_download_buffer;
 
-        ID3D12GraphicsCommandList_CopyTextureRegion(s->command_list,
-                                                    &staging_uv_location, 0, 0, 0,
-                                                    &texture_uv_location, NULL);
+            ID3D12GraphicsCommandList_CopyTextureRegion(s->command_list,
+                                                        &staging_location[i], 0, 0, 0,
+                                                        &texture_location[i], NULL);
+        }
 
         barrier.Transition.StateBefore = barrier.Transition.StateAfter;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_COMMON;
@@ -573,13 +592,11 @@ static int d3d12va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
     } else {
         if (!s->staging_upload_buffer) {
             ret = d3d12va_create_staging_buffer_resource(ctx, D3D12_RESOURCE_STATE_GENERIC_READ,
-                                                        &s->staging_upload_buffer, 0);
+                                                        &s->staging_upload_buffer, staging_size, 0);
             if (ret < 0) {
                 goto fail;
             }
         }
-
-        staging_y_location.pResource = staging_uv_location.pResource = s->staging_upload_buffer;
 
         DX_CHECK(ID3D12Resource_Map(s->staging_upload_buffer, 0, NULL, (void **)&mapped_data));
         av_image_fill_pointers(data, ctx->sw_format, ctx->height, mapped_data, linesizes);
@@ -591,13 +608,13 @@ static int d3d12va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
 
         ID3D12GraphicsCommandList_ResourceBarrier(s->command_list, 1, &barrier);
 
-        ID3D12GraphicsCommandList_CopyTextureRegion(s->command_list,
-                                                    &texture_y_location, 0, 0, 0,
-                                                    &staging_y_location, NULL);
+        for (unsigned i = 0; i < nb_planes; i++) {
+            staging_location[i].pResource = s->staging_upload_buffer;
 
-        ID3D12GraphicsCommandList_CopyTextureRegion(s->command_list,
-                                                    &texture_uv_location, 0, 0, 0,
-                                                    &staging_uv_location, NULL);
+            ID3D12GraphicsCommandList_CopyTextureRegion(s->command_list,
+                                                        &texture_location[i], 0, 0, 0,
+                                                        &staging_location[i], NULL);
+        }
 
         barrier.Transition.StateBefore = barrier.Transition.StateAfter;
         barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;

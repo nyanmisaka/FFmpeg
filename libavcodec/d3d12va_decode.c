@@ -409,6 +409,12 @@ int ff_d3d12va_common_frame_params(AVCodecContext *avctx, AVBufferRef *hw_frames
     switch (avctx->sw_pix_fmt) {
     case AV_PIX_FMT_YUV420P10: frames_ctx->sw_format = AV_PIX_FMT_P010; break;
     case AV_PIX_FMT_YUV420P12: frames_ctx->sw_format = AV_PIX_FMT_P012; break;
+    case AV_PIX_FMT_YUV422P:   frames_ctx->sw_format = AV_PIX_FMT_YUYV422; break;
+    case AV_PIX_FMT_YUV422P10: frames_ctx->sw_format = AV_PIX_FMT_Y210; break;
+    case AV_PIX_FMT_YUV422P12: frames_ctx->sw_format = AV_PIX_FMT_Y212; break;
+    case AV_PIX_FMT_YUV444P:   frames_ctx->sw_format = AV_PIX_FMT_VUYX; break;
+    case AV_PIX_FMT_YUV444P10: frames_ctx->sw_format = AV_PIX_FMT_XV30; break;
+    case AV_PIX_FMT_YUV444P12: frames_ctx->sw_format = AV_PIX_FMT_XV36; break;
     default:                   frames_ctx->sw_format = AV_PIX_FMT_NV12; break;
     }
     frames_ctx->width     = avctx->coded_width;
