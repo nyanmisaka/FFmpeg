@@ -22,11 +22,11 @@
 #include "libavutil/imgutils.h"
 #include "libavutil/hwcontext.h"
 #include "libavutil/hwcontext_amf.h"
+#define COBJMACROS
 #if CONFIG_D3D11VA
 #include "libavutil/hwcontext_d3d11va.h"
 #endif
 #if CONFIG_DXVA2
-#define COBJMACROS
 #include "libavutil/hwcontext_dxva2.h"
 #endif
 #include "libavutil/mem.h"
@@ -38,10 +38,6 @@
 
 #define AMF_AV_FRAME_REF    L"av_frame_ref"
 #define PTS_PROP            L"PtsProp"
-
-#if CONFIG_D3D11VA
-#include <d3d11.h>
-#endif
 
 #ifdef _WIN32
 #include "compat/w32dlfcn.h"
@@ -79,6 +75,7 @@ static int amf_init_encoder(AVCodecContext *avctx)
 {
     AMFEncoderContext  *ctx = avctx->priv_data;
     const wchar_t      *codec_id = NULL;
+    const wchar_t      *cap_color_conversion = NULL;
     AMF_RESULT          res;
     enum AVPixelFormat  pix_fmt;
     AVHWDeviceContext  *hw_device_ctx = (AVHWDeviceContext*)ctx->device_ctx_ref->data;
@@ -100,17 +97,20 @@ static int amf_init_encoder(AVCodecContext *avctx)
     next_encoder_index++;
 
     switch (avctx->codec->id) {
-        case AV_CODEC_ID_H264:
-            codec_id = AMFVideoEncoderVCE_AVC;
-            break;
-        case AV_CODEC_ID_HEVC:
-            codec_id = AMFVideoEncoder_HEVC;
-            break;
-        case AV_CODEC_ID_AV1 :
-            codec_id = AMFVideoEncoder_AV1;
-            break;
-        default:
-            break;
+    case AV_CODEC_ID_H264:
+        codec_id             = AMFVideoEncoderVCE_AVC;
+        cap_color_conversion = AMF_VIDEO_ENCODER_CAP_COLOR_CONVERSION;
+        break;
+    case AV_CODEC_ID_HEVC:
+        codec_id             = AMFVideoEncoder_HEVC;
+        cap_color_conversion = AMF_VIDEO_ENCODER_HEVC_CAP_COLOR_CONVERSION;
+        break;
+    case AV_CODEC_ID_AV1 :
+        codec_id             = AMFVideoEncoder_AV1;
+        cap_color_conversion = AMF_VIDEO_ENCODER_AV1_CAP_COLOR_CONVERSION;
+        break;
+    default:
+        break;
     }
     AMF_RETURN_IF_FALSE(ctx, codec_id != NULL, AVERROR(EINVAL), "Codec %d is not supported\n", avctx->codec->id);
 
@@ -129,6 +129,24 @@ static int amf_init_encoder(AVCodecContext *avctx)
 
     res = amf_device_ctx->factory->pVtbl->CreateComponent(amf_device_ctx->factory, amf_device_ctx->context, codec_id, &ctx->encoder);
     AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_ENCODER_NOT_FOUND, "CreateComponent(%ls) failed with error %d\n", codec_id, res);
+
+    ctx->efc = 0;
+    if (cap_color_conversion) {
+        AMFCaps *encoder_caps = NULL;
+        res = ctx->encoder->pVtbl->GetCaps(ctx->encoder, &encoder_caps);
+        if (res == AMF_OK && encoder_caps) {
+            AMFVariantStruct var = { 0 };
+            res = encoder_caps->pVtbl->GetProperty(encoder_caps, cap_color_conversion, &var);
+            if (res == AMF_OK && var.type == AMF_VARIANT_INT64) {
+                // AMF_ACCEL_GPU: shader-based, supports DCC
+                // AMF_ACCEL_HARDWARE: fixed-function EFC HW, may not support DCC
+                ctx->efc = var.int64Value == AMF_ACCEL_HARDWARE;
+                AMFVariantClear(&var);
+            }
+        }
+        if (encoder_caps)
+            encoder_caps->pVtbl->Release(encoder_caps);
+    }
 
     ctx->submitted_frame = 0;
     ctx->encoded_frame = 0;
@@ -167,7 +185,7 @@ int av_cold ff_amf_encode_close(AVCodecContext *avctx)
 }
 
 static int amf_copy_surface(AVCodecContext *avctx, const AVFrame *frame,
-    AMFSurface* surface)
+                            AMFSurface *surface)
 {
     AMFPlane *plane;
     uint8_t  *dst_data[4] = {0};
@@ -389,7 +407,7 @@ static AMF_RESULT amf_release_attached_frame_ref(AMFEncoderContext *ctx, AMFBuff
     return res;
 }
 
-static int amf_submit_frame(AVCodecContext *avctx, AVFrame    *frame, AMFSurface **surface_resubmit)
+static int amf_submit_frame(AVCodecContext *avctx, AVFrame *frame, AMFSurface **surface_resubmit)
 {
     AMFEncoderContext      *ctx = avctx->priv_data;
     AVHWDeviceContext      *hw_device_ctx = (AVHWDeviceContext*)ctx->device_ctx_ref->data;
@@ -398,9 +416,10 @@ static int amf_submit_frame(AVCodecContext *avctx, AVFrame    *frame, AMFSurface
     AMF_RESULT              res;
     int                     ret;
     int                     hw_surface = 0;
+    int                     needs_duplicate = 0;
     int                     output_delay = FFMAX(ctx->max_b_frames, 0) + ((avctx->flags & AV_CODEC_FLAG_LOW_DELAY) ? 0 : 1);
 
-// prepare surface from frame
+    // prepare surface from frame
     switch (frame->format) {
 #if CONFIG_D3D11VA
     case AV_PIX_FMT_D3D11:
@@ -408,12 +427,22 @@ static int amf_submit_frame(AVCodecContext *avctx, AVFrame    *frame, AMFSurface
             static const GUID AMFTextureArrayIndexGUID = { 0x28115527, 0xe7c3, 0x4b66, { 0x99, 0xd3, 0x4f, 0x2a, 0xe6, 0xb4, 0x7f, 0xaf } };
             ID3D11Texture2D *texture = (ID3D11Texture2D*)frame->data[0]; // actual texture
             int index = (intptr_t)frame->data[1]; // index is a slice in texture array is - set to tell AMF which slice to use
-                av_assert0(frame->hw_frames_ctx       && avctx->hw_frames_ctx &&
-                    frame->hw_frames_ctx->data == avctx->hw_frames_ctx->data);
-                texture->lpVtbl->SetPrivateData(texture, &AMFTextureArrayIndexGUID, sizeof(index), &index);
-                res = amf_device_ctx->context->pVtbl->CreateSurfaceFromDX11Native(amf_device_ctx->context, texture, &surface, NULL); // wrap to AMF surface
-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX11Native() failed  with error %d\n", res);
-                hw_surface = 1;
+            av_assert0(frame->hw_frames_ctx       && avctx->hw_frames_ctx &&
+                       frame->hw_frames_ctx->data == avctx->hw_frames_ctx->data);
+            texture->lpVtbl->SetPrivateData(texture, &AMFTextureArrayIndexGUID, sizeof(index), &index);
+            res = amf_device_ctx->context->pVtbl->CreateSurfaceFromDX11Native(amf_device_ctx->context, texture, &surface, NULL); // wrap to AMF surface
+            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX11Native() failed with error %d\n", res);
+
+            if (ctx->efc) {
+                const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(((AVHWFramesContext*)frame->hw_frames_ctx->data)->sw_format);
+                av_assert0(pix_desc);
+                if (pix_desc->flags & AV_PIX_FMT_FLAG_RGB) {
+                    D3D11_TEXTURE2D_DESC tex_desc;
+                    ID3D11Texture2D_GetDesc(texture, &tex_desc);
+                    needs_duplicate = !!(tex_desc.BindFlags & D3D11_BIND_RENDER_TARGET);
+                }
+            }
+            hw_surface = 1;
         }
         break;
 #endif
@@ -421,9 +450,19 @@ static int amf_submit_frame(AVCodecContext *avctx, AVFrame    *frame, AMFSurface
     case AV_PIX_FMT_DXVA2_VLD:
         {
             IDirect3DSurface9 *texture = (IDirect3DSurface9 *)frame->data[3]; // actual texture
-                res = amf_device_ctx->context->pVtbl->CreateSurfaceFromDX9Native(amf_device_ctx->context, texture, &surface, NULL); // wrap to AMF surface
-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX9Native() failed  with error %d\n", res);
-                hw_surface = 1;
+            res = amf_device_ctx->context->pVtbl->CreateSurfaceFromDX9Native(amf_device_ctx->context, texture, &surface, NULL); // wrap to AMF surface
+            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX9Native() failed with error %d\n", res);
+
+            if (ctx->efc) {
+                const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(((AVHWFramesContext*)frame->hw_frames_ctx->data)->sw_format);
+                av_assert0(pix_desc);
+                if (pix_desc->flags & AV_PIX_FMT_FLAG_RGB) {
+                    D3DSURFACE_DESC tex_desc;
+                    needs_duplicate = SUCCEEDED(IDirect3DSurface9_GetDesc(texture, &tex_desc)) &&
+                                      (tex_desc.Usage & D3DUSAGE_RENDERTARGET);
+                }
+            }
+            hw_surface = 1;
         }
         break;
 #endif
@@ -437,23 +476,39 @@ static int amf_submit_frame(AVCodecContext *avctx, AVFrame    *frame, AMFSurface
     default:
         {
             res = amf_device_ctx->context->pVtbl->AllocSurface(amf_device_ctx->context, AMF_MEMORY_HOST, ctx->format, avctx->width, avctx->height, &surface);
-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "AllocSurface() failed  with error %d\n", res);
+            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "AllocSurface() failed with error %d\n", res);
             amf_copy_surface(avctx, frame, surface);
         }
         break;
     }
     if (hw_surface) {
+        // RGB textures bound as render target and imported via CreateSurfaceFromDX{9,11}Native()
+        // may have DCC compression enabled, which the encoder's EFC HW might not support.
+        // Duplicate the AMF surface to disable DCC and ensure it is always compatible.
+        if (needs_duplicate) {
+            AMFData    *out_data    = NULL;
+            AMFSurface *out_surface = NULL;
+            AMFGuid     iid_surface = IID_AMFSurface();
+            res = surface->pVtbl->Duplicate(surface, surface->pVtbl->GetMemoryType(surface), &out_data);
+            surface->pVtbl->Release(surface);
+            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "Duplicate() failed with error %d\n", res);
+
+            res = out_data->pVtbl->QueryInterface(out_data, &iid_surface, (void **)&out_surface);
+            out_data->pVtbl->Release(out_data);
+            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "QueryInterface(IID_AMFSurface) failed with error %d\n", res);
+            surface = out_surface;
+        }
         amf_store_attached_frame_ref(ctx, frame, surface);
         ctx->hwsurfaces_in_queue++;
         // input HW surfaces can be vertically aligned by 16; tell AMF the real size
         surface->pVtbl->SetCrop(surface, 0, 0, frame->width, frame->height);
     }
-        // HDR10 metadata
+    // HDR10 metadata
     if (frame->color_trc == AVCOL_TRC_SMPTE2084) {
-        AMFBuffer * hdrmeta_buffer = NULL;
+        AMFBuffer *hdrmeta_buffer = NULL;
         res = amf_device_ctx->context->pVtbl->AllocBuffer(amf_device_ctx->context, AMF_MEMORY_HOST, sizeof(AMFHDRMetadata), &hdrmeta_buffer);
         if (res == AMF_OK) {
-            AMFHDRMetadata * hdrmeta = (AMFHDRMetadata*)hdrmeta_buffer->pVtbl->GetNative(hdrmeta_buffer);
+            AMFHDRMetadata *hdrmeta = (AMFHDRMetadata*)hdrmeta_buffer->pVtbl->GetNative(hdrmeta_buffer);
             if (av_amf_extract_hdr_metadata(frame, hdrmeta) == 0) {
                 switch (avctx->codec->id) {
                 case AV_CODEC_ID_H264:
