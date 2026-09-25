@@ -269,20 +269,16 @@ static av_cold int amf_encode_init_av1(AVCodecContext* avctx)
 
     if (!(pix_desc->flags & AV_PIX_FMT_FLAG_RGB)) {
         // Color Transfer Characteristics (AMF matches ISO/IEC)
-        if (avctx->color_trc != AVCOL_TRC_UNSPECIFIED) {
-            // if input is YUV, color_trc is for VUI only - any value
-            // AMF VCN color conversion supports only specific output transfer characteristic SMPTE2084 for 10-bit and BT709 for 8-bit
-            // vpp_amf supports more
-            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_AV1_OUTPUT_TRANSFER_CHARACTERISTIC, avctx->color_trc);
-        }
+        // if input is YUV, color_trc is for VUI only - any value
+        // AMF VCN color conversion supports only specific output transfer characteristic SMPTE2084 for 10-bit and BT709 for 8-bit
+        // vpp_amf supports more
+        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_AV1_OUTPUT_TRANSFER_CHARACTERISTIC, avctx->color_trc);
 
         // Color Primaries (AMF matches ISO/IEC)
-        if (avctx->color_primaries != AVCOL_PRI_UNSPECIFIED) {
-            // if input is YUV, color_primaries are for VUI only
-            // AMF VCN color conversion supports only specific primaries BT2020 for 10-bit and BT709 for 8-bit
-            // vpp_amf supports more
-            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_AV1_OUTPUT_COLOR_PRIMARIES, avctx->color_primaries);
-        }
+        // if input is YUV, color_primaries are for VUI only
+        // AMF VCN color conversion supports only specific primaries BT2020 for 10-bit and BT709 for 8-bit
+        // vpp_amf supports more
+        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_AV1_OUTPUT_COLOR_PRIMARIES, avctx->color_primaries);
     }
 
     profile_level = avctx->level;
@@ -751,7 +747,7 @@ const FFCodec ff_av1_amf_encoder = {
     .p.capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HARDWARE |
                       AV_CODEC_CAP_DR1,
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
-    CODEC_PIXFMTS_ARRAY(ff_amf_pix_fmts),
+    CODEC_PIXFMTS_ARRAY(ff_amf_pix_fmts_8b_10b),
     .color_ranges   = AVCOL_RANGE_MPEG | AVCOL_RANGE_JPEG,
     .p.wrapper_name   = "amf",
     .hw_configs     = ff_amfenc_hw_configs,

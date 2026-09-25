@@ -162,7 +162,8 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt);
 /**
 * Supported formats
 */
-extern const enum AVPixelFormat ff_amf_pix_fmts[];
+extern const enum AVPixelFormat ff_amf_pix_fmts_8b[];
+extern const enum AVPixelFormat ff_amf_pix_fmts_8b_10b[];
 
 /**
 * Error handling helper

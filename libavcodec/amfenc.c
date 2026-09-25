@@ -47,27 +47,47 @@
 
 #define FFMPEG_AMF_WRITER_ID L"ffmpeg_amf"
 
+#define AMF_AV_8B_FMTS  \
+    AV_PIX_FMT_NV12,    \
+    AV_PIX_FMT_YUV420P, \
+    AV_PIX_FMT_BGR0,    \
+    AV_PIX_FMT_RGB0,    \
+    AV_PIX_FMT_BGRA,    \
+    AV_PIX_FMT_ARGB,    \
+    AV_PIX_FMT_RGBA
 
-const enum AVPixelFormat ff_amf_pix_fmts[] = {
-    AV_PIX_FMT_NV12,
-    AV_PIX_FMT_YUV420P,
+#define AMF_AV_10B_FMTS \
+    AV_PIX_FMT_P010,    \
+    AV_PIX_FMT_X2BGR10, \
+    AV_PIX_FMT_RGBAF16
+
+const enum AVPixelFormat ff_amf_pix_fmts_8b[] = {
+    AMF_AV_8B_FMTS,
 #if CONFIG_D3D11VA
     AV_PIX_FMT_D3D11,
 #endif
 #if CONFIG_DXVA2
     AV_PIX_FMT_DXVA2_VLD,
 #endif
-    AV_PIX_FMT_P010,
     AV_PIX_FMT_AMF_SURFACE,
-    AV_PIX_FMT_BGR0,
-    AV_PIX_FMT_RGB0,
-    AV_PIX_FMT_BGRA,
-    AV_PIX_FMT_ARGB,
-    AV_PIX_FMT_RGBA,
-    AV_PIX_FMT_X2BGR10,
-    AV_PIX_FMT_RGBAF16,
     AV_PIX_FMT_NONE
 };
+
+const enum AVPixelFormat ff_amf_pix_fmts_8b_10b[] = {
+    AMF_AV_8B_FMTS,
+    AMF_AV_10B_FMTS,
+#if CONFIG_D3D11VA
+    AV_PIX_FMT_D3D11,
+#endif
+#if CONFIG_DXVA2
+    AV_PIX_FMT_DXVA2_VLD,
+#endif
+    AV_PIX_FMT_AMF_SURFACE,
+    AV_PIX_FMT_NONE
+};
+
+#undef AMF_AV_8B_FMTS
+#undef AMF_AV_10B_FMTS
 
 static int64_t next_encoder_index = 0;
 
@@ -119,8 +139,17 @@ static int amf_init_encoder(AVCodecContext *avctx)
     else
         pix_fmt = avctx->pix_fmt;
 
-    if (pix_fmt == AV_PIX_FMT_P010) {
-        AMF_RETURN_IF_FALSE(ctx, amf_device_ctx->version >= AMF_MAKE_FULL_VERSION(1, 4, 32, 0), AVERROR_UNKNOWN, "10-bit encoder is not supported by AMD GPU drivers versions lower than 23.30.\n");
+    // For pre-23.30 legacy drivers:
+    // RGB 10-bit to YUV color conversion is known broken
+    // YUV 10-bit needs valid AMF_VIDEO_ENCODER_*_OUTPUT_TRANSFER_CHARACTERISTIC to work correctly
+    if (amf_device_ctx->version < AMF_MAKE_FULL_VERSION(1, 4, 32, 0)) {
+        const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(pix_fmt);
+        av_assert0(pix_desc);
+        if ((pix_desc->flags & AV_PIX_FMT_FLAG_RGB) && pix_desc->comp[0].depth >= 10) {
+            av_log(ctx, AV_LOG_ERROR, "Format %s is not supported by "
+                   "AMD GPU drivers versions lower than 23.30\n", av_get_pix_fmt_name(pix_fmt));
+            return AVERROR(EINVAL);
+        }
     }
 
     ctx->format = av_av_to_amf_format(pix_fmt);
