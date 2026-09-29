@@ -208,6 +208,13 @@ static inline FilterLink* ff_filter_link(AVFilterLink *link)
 #define FF_FILTER_FLAG_HWFRAME_AWARE (1 << 0)
 
 /**
+ * The filter handles input frames whose format or size differ from the ones
+ * its input link was configured with. ff_filter_frame() rejects such frames
+ * for every other filter.
+ */
+#define FF_FILTER_FLAG_DYNAMIC_FRAME_PARAMS (1 << 1)
+
+/**
  * Find the index of a link.
  *
  * I.e. find i such that link == ctx->(in|out)puts[i]

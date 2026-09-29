@@ -1032,7 +1032,7 @@ const FFFilter ff_vf_scale_npp = {
 
     FILTER_SINGLE_PIXFMT(AV_PIX_FMT_CUDA),
 
-    .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
+    .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE | FF_FILTER_FLAG_DYNAMIC_FRAME_PARAMS,
 };
 
 static const AVFilterPad nppscale2ref_inputs[] = {
@@ -1080,5 +1080,5 @@ const FFFilter ff_vf_scale2ref_npp = {
 
     FILTER_SINGLE_PIXFMT(AV_PIX_FMT_CUDA),
 
-    .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
+    .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE | FF_FILTER_FLAG_DYNAMIC_FRAME_PARAMS,
 };

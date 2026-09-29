@@ -447,6 +447,9 @@ int ff_filter_config_links(AVFilterContext *filter)
                     return ret;
                 }
 
+            li->cfg_format = link->format;
+            li->cfg_w      = link->w;
+            li->cfg_h      = link->h;
             li->init_state = AVLINK_INIT;
         }
     }
@@ -1073,16 +1076,14 @@ int ff_filter_frame(AVFilterLink *link, AVFrame *frame)
 
     /* Consistency checks */
     if (link->type == AVMEDIA_TYPE_VIDEO) {
-        if (strcmp(link->dst->filter->name, "buffersink") &&
-            strcmp(link->dst->filter->name, "format") &&
-            strcmp(link->dst->filter->name, "idet") &&
-            strcmp(link->dst->filter->name, "null") &&
-            strcmp(link->dst->filter->name, "scale") &&
-            strcmp(link->dst->filter->name, "libplacebo") &&
-            strcmp(link->dst->filter->name, "hqdn3d")) {
-            av_assert1(frame->format        == link->format);
-            av_assert1(frame->width         == link->w);
-            av_assert1(frame->height        == link->h);
+        if (!(fffilter(link->dst->filter)->flags_internal & FF_FILTER_FLAG_DYNAMIC_FRAME_PARAMS)) {
+            if (frame->format != li->cfg_format ||
+                frame->width  != li->cfg_w      ||
+                frame->height != li->cfg_h) {
+                av_log(link->dst, AV_LOG_ERROR,
+                       "Frame size or format changed without filter graph reinitialization\n");
+                goto error;
+            }
             if (av_pix_fmt_desc_get(link->format)->flags & AV_PIX_FMT_FLAG_ALPHA)
                 av_assert1(frame->alpha_mode == link->alpha_mode);
         }
