@@ -77,6 +77,7 @@ typedef struct CropContext {
     int  y;             ///< y offset of the non-cropped area with respect to the input area
     int  w;             ///< width of the cropped area
     int  h;             ///< height of the cropped area
+    int in_format, in_w, in_h; ///< input parameters the crop area was computed for
 
     AVRational out_sar; ///< output sample aspect ratio
     int keep_aspect;    ///< keep display aspect ratio when cropping
@@ -223,6 +224,9 @@ static int config_input(AVFilterLink *link)
         s->x &= ~((1 << s->hsub) - 1);
         s->y &= ~((1 << s->vsub) - 1);
     }
+    s->in_format = link->format;
+    s->in_w      = link->w;
+    s->in_h      = link->h;
     return 0;
 
 fail_expr:
@@ -252,8 +256,22 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
     FilterLink        *l = ff_filter_link(link);
     AVFilterContext *ctx = link->dst;
     CropContext *s = ctx->priv;
-    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(link->format);
-    int i;
+    const AVPixFmtDescriptor *desc;
+    int i, ret;
+
+    if (frame->format != s->in_format ||
+        frame->width  != s->in_w      ||
+        frame->height != s->in_h) {
+        link->format = frame->format;
+        link->w      = frame->width;
+        link->h      = frame->height;
+        if ((ret = config_input(link)) < 0 ||
+            (ret = config_output(ctx->outputs[0])) < 0) {
+            av_frame_free(&frame);
+            return ret;
+        }
+    }
+    desc = av_pix_fmt_desc_get(link->format);
 
     s->var_values[VAR_N] = l->frame_count_out;
     s->var_values[VAR_T] = frame->pts == AV_NOPTS_VALUE ?
@@ -395,4 +413,5 @@ const FFFilter ff_vf_crop = {
     FILTER_OUTPUTS(avfilter_vf_crop_outputs),
     FILTER_QUERY_FUNC2(query_formats),
     .process_command = process_command,
+    .flags_internal = FF_FILTER_FLAG_DYNAMIC_FRAME_PARAMS,
 };
