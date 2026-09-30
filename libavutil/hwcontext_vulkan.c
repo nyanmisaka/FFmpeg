@@ -185,6 +185,9 @@ typedef struct VulkanDevicePriv {
     /* Prefer memcpy over dynamic host pointer imports */
     int avoid_host_import;
 
+    /* Disable host_image_copy extension */
+    int no_host_image_copy;
+
     /* Alignment the transfer queue needs for buffer offsets in image copies */
     int transfer_offset_align;
 
@@ -1006,7 +1009,7 @@ static int check_extensions(AVHWDeviceContext *ctx, int dev, AVDictionary *opts,
 
         /* Check if the device has ReBAR for host image copies */
         if (!strcmp(tstr, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME) &&
-            !vulkan_device_has_rebar(ctx))
+            (p->no_host_image_copy || !vulkan_device_has_rebar(ctx)))
             continue;
 
         /* VK_KHR_maintenance11 on the AMD proprietary driver forces
@@ -1893,6 +1896,11 @@ static int vulkan_device_create_internal(AVHWDeviceContext *ctx,
 
     /* Get supported memory types */
     vk->GetPhysicalDeviceMemoryProperties(hwctx->phys_dev, &p->mprops);
+
+    /* Disable host_image_copy extension for perf comparison */
+    opt_d = av_dict_get(opts, "no_host_image_copy", NULL, 0);
+    if (opt_d)
+        p->no_host_image_copy = strtol(opt_d->value, NULL, 10);
 
     /* Find and enable extensions for the physical device */
     if ((err = check_extensions(ctx, 1, opts, &dev_info.ppEnabledExtensionNames,
