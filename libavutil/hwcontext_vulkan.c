@@ -2546,12 +2546,19 @@ static int alloc_bind_mem(AVHWFramesContext *hwfc, AVVkFrame *f,
 
         /* Allocate memory */
         if ((err = alloc_mem(ctx, &req.memoryRequirements,
-                             f->tiling == VK_IMAGE_TILING_LINEAR ?
-                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT :
                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                              use_ded_mem ? &ded_alloc : (void *)ded_alloc.pNext,
-                             &f->flags, &f->mem[img_cnt])))
-            return err;
+                             &f->flags, &f->mem[img_cnt]))) {
+            /* Fall back to host-visible memory for linear images. */
+            if (f->tiling == VK_IMAGE_TILING_LINEAR && err == AVERROR(EINVAL)) {
+                err = alloc_mem(ctx, &req.memoryRequirements,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                                use_ded_mem ? &ded_alloc : (void *)ded_alloc.pNext,
+                                &f->flags, &f->mem[img_cnt]);
+            }
+            if (err)
+                return err;
+        }
 
         f->size[img_cnt] = req.memoryRequirements.size;
         bind_info[img_cnt].sType  = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
