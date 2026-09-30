@@ -1009,6 +1009,12 @@ static int check_extensions(AVHWDeviceContext *ctx, int dev, AVDictionary *opts,
             !vulkan_device_has_rebar(ctx))
             continue;
 
+        /* VK_KHR_maintenance11 on the AMD proprietary driver forces
+         * copies to be performed on the Compute engine rather than SDMA */
+        if (!strcmp(tstr, VK_KHR_MAINTENANCE_11_EXTENSION_NAME) &&
+            p->dprops.driverID == VK_DRIVER_ID_AMD_PROPRIETARY)
+            continue;
+
         if (dev &&
             ((debug_mode == FF_VULKAN_DEBUG_VALIDATE) ||
              (debug_mode == FF_VULKAN_DEBUG_PRINTF) ||
