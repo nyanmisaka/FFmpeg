@@ -2161,6 +2161,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
     p->compute_qf = ff_vk_qf_find(&p->vkctx, VK_QUEUE_COMPUTE_BIT, 0);
     p->transfer_qf = ff_vk_qf_find(&p->vkctx, VK_QUEUE_TRANSFER_BIT, 0);
 
+    av_log(ctx, AV_LOG_WARNING, "p->transfer_qf->idx: %d\n", p->transfer_qf->idx);
+
     /* Transfer-only queues need 4-byte aligned buffer offsets in image copies */
     p->transfer_offset_align = 1;
     if (p->transfer_qf) {
