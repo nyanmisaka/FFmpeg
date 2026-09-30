@@ -1947,8 +1947,9 @@ static int vulkan_device_create_internal(AVHWDeviceContext *ctx,
             p->disable_multiplane = strtol(opt_d->value, NULL, 10);
     }
 
-    /* Disable host pointer imports (by default on nvidia) */
-    p->avoid_host_import = p->dprops.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+    /* Disable host pointer imports (by default on NVIDIA & AMD proprietary) */
+    p->avoid_host_import = p->dprops.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY ||
+                           p->dprops.driverID == VK_DRIVER_ID_AMD_PROPRIETARY;
     opt_d = av_dict_get(opts, "avoid_host_import", NULL, 0);
     if (opt_d)
         p->avoid_host_import = strtol(opt_d->value, NULL, 10);
