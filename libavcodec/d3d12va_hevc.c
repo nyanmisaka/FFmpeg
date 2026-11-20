@@ -181,6 +181,18 @@ static av_cold int d3d12va_hevc_decode_init(AVCodecContext *avctx)
         ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10;
         break;
 
+    case AV_PROFILE_HEVC_REXT:
+        {
+            // D3D12 and DXVA2 share the same HEVC RExt profile GUIDs.
+            const GUID *rext_prof = ff_dxva2_hevc_parse_rext_profile(avctx);
+
+            if (IsEqualGUID(rext_prof, &ff_GUID_NULL))
+                return AVERROR(EINVAL);
+
+            ctx->cfg.DecodeProfile = *rext_prof;
+            break;
+        }
+
     case AV_PROFILE_HEVC_MAIN_STILL_PICTURE:
         if (avctx->hwaccel_flags & AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH) {
             ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
