@@ -76,11 +76,24 @@ static const struct {
 } supported_formats[] = {
     { DXGI_FORMAT_NV12,               AV_PIX_FMT_NV12    },
     { DXGI_FORMAT_P010,               AV_PIX_FMT_P010    },
-    { DXGI_FORMAT_P016,               AV_PIX_FMT_P012    },
     { DXGI_FORMAT_B8G8R8A8_UNORM,     AV_PIX_FMT_BGRA    },
     { DXGI_FORMAT_R8G8B8A8_UNORM,     AV_PIX_FMT_RGBA    },
     { DXGI_FORMAT_R10G10B10A2_UNORM,  AV_PIX_FMT_X2BGR10 },
     { DXGI_FORMAT_R16G16B16A16_FLOAT, AV_PIX_FMT_RGBAF16 },
+    { DXGI_FORMAT_AYUV,               AV_PIX_FMT_VUYX    },
+    { DXGI_FORMAT_YUY2,               AV_PIX_FMT_YUYV422 },
+    { DXGI_FORMAT_Y210,               AV_PIX_FMT_Y210    },
+    { DXGI_FORMAT_Y410,               AV_PIX_FMT_XV30    },
+    { DXGI_FORMAT_P016,               AV_PIX_FMT_P016    },
+    { DXGI_FORMAT_Y216,               AV_PIX_FMT_Y216    },
+    { DXGI_FORMAT_Y416,               AV_PIX_FMT_XV48    },
+    /**
+     * There is no 12 bit pixel format defined in DXGI_FORMAT*,
+     * use 16 bit to compatible with 12 bit AV_PIX_FMT* formats.
+     */
+    { DXGI_FORMAT_P016,               AV_PIX_FMT_P012    },
+    { DXGI_FORMAT_Y216,               AV_PIX_FMT_Y212    },
+    { DXGI_FORMAT_Y416,               AV_PIX_FMT_XV36    },
 };
 
 static void d3d12va_default_lock(void *ctx)
